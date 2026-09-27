@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "request_id": "req_fixture_correction",
+  "actor": {
+    "kind": "agent",
+    "id": "fixture-agent"
+  },
+  "entries": [
+    {
+      "id": "clm_fixture_corrected",
+      "type": "claim",
+      "data": {
+        "text": "架空の比較表では条件XでAがBを上回り、条件Yでは同点だった。",
+        "kind": "assertion",
+        "attributed_to": "fictional-experimenter",
+        "scope": "Only the two reported fictional rows; not a general ranking.",
+        "why": "Replace the agent's overgeneralization with what the table actually reports."
+      }
+    },
+    {
+      "id": "asm_fixture_corrected_x",
+      "type": "assessment",
+      "data": {
+        "claim_id": "clm_fixture_corrected",
+        "evidence_id": "evd_fixture_x",
+        "stance": "reports",
+        "rationale": "Row X reports the first part of the corrected statement."
+      }
+    },
+    {
+      "id": "asm_fixture_corrected_y",
+      "type": "assessment",
+      "data": {
+        "claim_id": "clm_fixture_corrected",
+        "evidence_id": "evd_fixture_y",
+        "stance": "reports",
+        "rationale": "Row Y reports the second part of the corrected statement."
+      }
+    },
+    {
+      "id": "rel_fixture_supersedes",
+      "type": "relation",
+      "data": {
+        "from_claim_id": "clm_fixture_corrected",
+        "to_claim_id": "clm_fixture_old",
+        "relation": "supersedes",
+        "rationale": "Correct the agent's universal wording; do not erase the historical claim."
+      }
+    },
+    {
+      "id": "rev_fixture_old",
+      "type": "review",
+      "data": {
+        "target_id": "clm_fixture_old",
+        "state": "withdrawn",
+        "rationale": "The universal wording exceeded the attached evidence."
+      }
+    }
+  ]
+}

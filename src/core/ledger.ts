@@ -87,18 +87,31 @@ export class Ledger {
         query, match: 'literal_terms_and', truth_evaluated: false };
     });
   }
+  private resolve(entry: Entry) {
+    const refs = references(entry).map(r => this.required(r.id));
+    const sourceIds = new Set(refs.filter(r => r.type === 'evidence').map(r => r.data.source_id));
+    return { ...this.view(entry), references: refs.map(r => this.view(r)),
+      sources: [...sourceIds].map(s => this.view(this.required(s))) };
+  }
+  inspectCapture(requestId: string, limit = 20, offset = 0) {
+    pageBounds(limit, offset);
+    if (typeof requestId !== 'string' || !/^[A-Za-z][A-Za-z0-9_.:-]{1,127}$/.test(requestId))
+      fail('VALIDATION', 'invalid request_id');
+    return this.store.transaction(() => {
+      const receipt = this.store.receipt(requestId) ?? fail('NOT_FOUND', `No capture: ${requestId}`);
+      const ids = receipt.ids.slice(offset, offset + limit);
+      return { request_id: receipt.request_id, digest: receipt.digest, total: receipt.ids.length,
+        items: ids.map(id => this.resolve(this.required(id))),
+        next_offset: offset + limit < receipt.ids.length ? offset + limit : null,
+        states_as_of: 'inspection', truth_evaluated: false };
+    });
+  }
   show(id: string, limit = 20, offset = 0) {
     pageBounds(limit, offset);
     return this.store.transaction(() => {
       const entry = this.required(id);
-      const resolve = (e: Entry) => {
-        const refs = references(e).map(r => this.required(r.id));
-        const sourceIds = new Set(refs.filter(r => r.type === 'evidence').map(r => r.data.source_id));
-        return { ...this.view(e), references: refs.map(r => this.view(r)),
-          sources: [...sourceIds].map(s => this.view(this.required(s))) };
-      };
       const rows = this.store.incoming(id, limit + 1, offset);
-      return { ...resolve(entry), connections: rows.slice(0, limit).map(resolve),
+      return { ...this.resolve(entry), connections: rows.slice(0, limit).map(e => this.resolve(e)),
         next_offset: rows.length > limit ? offset + limit : null, truth_evaluated: false };
     });
   }
