@@ -1,7 +1,8 @@
 // Deterministic scale/cost measurement for #44. Builds synthetic ledgers at
 // explicit sizes, times representative operations, and prints one JSON report.
 // Not part of `npm test`: timings are environment-dependent. All content is
-// synthetic; no private data is read.
+// synthetic; no private data is read. Memory is intentionally unmeasured:
+// honest heap deltas need GC control at both boundaries (a later pass).
 import { performance } from 'node:perf_hooks';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -44,7 +45,7 @@ function buildLedger({ claims, evdPerClaim, asmPerEvd, reviewsPerClaim, verifica
     }
     const src = `src_m${String(c - (c % 10)).padStart(4, '0')}`;
     const clm = `clm_m${String(c).padStart(4, '0')}`;
-    entries.push({ id: clm, type: 'claim', data: { text: `架空所見${c}：${pick()}と${pick()}の関係 COMMONTERM`, kind: 'assertion', attributed_to: 'synthetic' } });
+    entries.push({ id: clm, type: 'claim', data: { text: `架空所見${c}：${pick()}と${pick()}の関係 COMMONTERM CLAIMRARE${c}`, kind: 'assertion', attributed_to: 'synthetic' } });
     counts.claim++;
     for (let e = 0; e < evdPerClaim; e++) {
       const evd = `${clm}_e${e}`;
@@ -82,7 +83,9 @@ function time(fn, runs = 4) {
   const samples = [];
   for (let i = 0; i < runs; i++) { const t = performance.now(); fn(); samples.push(performance.now() - t); }
   samples.sort((a, b) => a - b);
-  return { median_ms: samples[(runs / 2) | 0], max_ms: samples[runs - 1] };
+  const mid = runs / 2;
+  const median = runs % 2 ? samples[mid | 0] : (samples[mid - 1] + samples[mid]) / 2;
+  return { median_ms: median, max_ms: samples[runs - 1] };
 }
 
 const SCALES = [
@@ -95,29 +98,29 @@ const SCALES = [
 const report = { env: { node: process.version, platform: process.platform }, scales: [] };
 for (const shape of SCALES) {
   const { dir, store, ledger, counts, buildMs } = buildLedger(shape);
-  const mem0 = process.memoryUsage().heapUsed;
   const directCommon = time(() => ledger.search('COMMONTERM', { limit: 50 }));
-  const directRare = time(() => ledger.search('RARE7_0', { limit: 50 }));
+  const directRare = time(() => ledger.search(`CLAIMRARE${shape.claims - 1}`, { limit: 50 }));
   const expanded = time(() => ledger.search('RARE7_0', { limit: 50, expand: 'evidence' }));
   const show = time(() => ledger.show('clm_m0007'));
-  let probe = 0;
-  const capture = time(() => ledger.capture({ version: 1, request_id: `req_probe_${shape.name}_${probe}`, actor,
-    entries: [{ id: `clm_probe_${shape.name}_${probe++}`, type: 'claim', data: { text: 'probe', kind: 'assertion', attributed_to: 'syn' } }] }));
   const t0 = performance.now();
   const snapshot = ledger.exportSnapshot();
   const snapshotJson = JSON.stringify(snapshot);
   const exportMs = performance.now() - t0;
-  const t1 = performance.now();
   const dir2 = mkdtempSync(join(tmpdir(), 'yurai-scale-'));
   const store2 = new SqliteStore(join(dir2, 'ledger.sqlite'), true);
-  new Ledger(store2).importSnapshot(JSON.parse(snapshotJson));
+  const parsed = JSON.parse(snapshotJson);
+  const t1 = performance.now();
+  new Ledger(store2).importSnapshot(parsed);
   const importMs = performance.now() - t1;
   store2.close();
-  const mem1 = process.memoryUsage().heapUsed;
+  // Capture probes run last so export/import match the advertised counts.
+  let probe = 0;
+  const capture = time(() => ledger.capture({ version: 1, request_id: `req_probe_${shape.name}_${probe}`, actor,
+    entries: [{ id: `clm_probe_${shape.name}_${probe++}`, type: 'claim', data: { text: 'probe', kind: 'assertion', attributed_to: 'syn' } }] }));
   report.scales.push({ shape: shape.name, counts, build_ms: Math.round(buildMs),
     direct_common: directCommon, direct_rare: directRare, expanded, show, capture_single: capture,
     export_ms: Math.round(exportMs), export_bytes: Buffer.byteLength(snapshotJson, 'utf8'),
-    import_ms: Math.round(importMs), heap_delta_bytes: mem1 - mem0 });
+    import_ms: Math.round(importMs) });
   store.close();
   rmSync(dir, { recursive: true, force: true });
   rmSync(dir2, { recursive: true, force: true });
