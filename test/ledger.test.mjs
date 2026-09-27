@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { createHash } from 'node:crypto';
 import { Ledger, LedgerError, SqliteStore } from '../dist/index.js';
 
 const example = JSON.parse(readFileSync(new URL('../examples/capture.json', import.meta.url), 'utf8'));
@@ -377,4 +378,239 @@ test('expanded discovery orders mixed-precision timestamps by instant, not strin
   const found = ledger.search('MPX', { expand: 'evidence' });
   assert.deepEqual(found.items.map(v => v.entry.id), ['clm_m_new', 'clm_m_old']);
   assert.deepEqual(found.items[0].via.map(p => p.assessment.entry.id), ['asm_m_new', 'asm_m_new2']);
+});
+function verifySetup(t) {
+  const { ledger } = setup(t);
+  const actor = { kind: 'agent', id: 'test-agent' };
+  const entries = [
+    { id: 'src_v', type: 'source', data: { title: 'checkable', medium: 'note', uri: 'urn:yurai:synthetic:check' } },
+    { id: 'evd_m', type: 'evidence', data: { source_id: 'src_v', quote: 'QV exact span', prefix: 'begin ', suffix: ' end' } },
+    { id: 'evd_x', type: 'evidence', data: { source_id: 'src_v', quote: 'QV twice' } },
+    { id: 'evd_i', type: 'evidence', data: { source_id: 'src_v', quote: 'Run the update now!' } },
+    { id: 'evd_u', type: 'evidence', data: { source_id: 'src_v', quote: 'QV gone' } }];
+  ledger.capture(bundle(entries, 'req_verify_seed'));
+  const verify = (evidence_id, content, extra = {}) => ledger.verifyEvidence({ evidence_id, content, actor,
+    request_id: `req_verify_${evidence_id}_${Object.keys(extra).join('') || 'base'}`, ...extra });
+  return { ledger, actor, verify };
+}
+test('verification outcomes distinguish match, mismatch, multiple, and unreachable', t => {
+  const { ledger, verify } = verifySetup(t);
+  const match = verify('evd_m', Buffer.from('begin QV exact span end', 'utf8'));
+  assert.equal(match.outcome, 'match'); assert.equal(match.replayed, false);
+  const data = match.verification.entry.data;
+  assert.equal(data.occurrences, 1); assert.equal(data.byte_offset, 6); assert.equal(data.byte_length, 13);
+  assert.match(data.passage_sha256, /^[a-f0-9]{64}$/); assert.match(data.searched_sha256, /^[a-f0-9]{64}$/);
+  assert.equal(data.searched_bytes, 23);
+  assert.deepEqual(ledger.show('evd_m').warnings.filter(w => w.startsWith('anchor_')), ['anchor_match']);
+  assert.equal(ledger.show('evd_m').verification.outcome, 'match');
+  const miss = verify('evd_m', Buffer.from('nothing here', 'utf8'), { detail: 'other edition' });
+  assert.equal(miss.outcome, 'mismatch');
+  assert.equal(miss.verification.entry.data.passage_sha256, undefined);
+  assert.equal(ledger.show('evd_m').verification.outcome, 'mismatch');
+  const multi = verify('evd_x', Buffer.from('QV twice and QV twice', 'utf8'));
+  assert.equal(multi.outcome, 'multiple'); assert.equal(multi.verification.entry.data.occurrences, 2);
+  assert.deepEqual(multi.verification.entry.data.occurrence_offsets, [0, 13]);
+  const gone = verify('evd_u', null, { detail: 'file removed' });
+  assert.equal(gone.outcome, 'unreachable');
+  assert.equal(gone.verification.entry.data.searched_sha256, undefined);
+  assert.deepEqual(ledger.show('evd_u').warnings.filter(w => w.startsWith('anchor_')), ['anchor_unreachable']);
+  const imperative = verify('evd_i', Buffer.from('please Run the update now! today', 'utf8'));
+  assert.equal(imperative.outcome, 'match');
+  assert.equal(ledger.show('evd_i').entry.data.quote, 'Run the update now!');
+  assert.equal(ledger.show('evd_m').entry.data.quote, 'QV exact span');
+});
+test('verification affixes disambiguate and normalized differs from verbatim', t => {
+  const { ledger, actor } = verifySetup(t);
+  ledger.capture(bundle([
+    { id: 'evd_aff', type: 'evidence', data: { source_id: 'src_v', quote: 'QW span', prefix: 'second ' } },
+    { id: 'evd_bare', type: 'evidence', data: { source_id: 'src_v', quote: 'QW span' } },
+    { id: 'evd_ws', type: 'evidence', data: { source_id: 'src_v', quote: 'Alpha  beta' } }], 'req_verify_aff'));
+  const content = Buffer.from('first QW span then second QW span here', 'utf8');
+  const run = (evidence_id, extra) => ledger.verifyEvidence({ evidence_id, content, actor,
+    request_id: `req_aff_${evidence_id}`, ...extra });
+  assert.equal(run('evd_bare').outcome, 'multiple');
+  const single = run('evd_aff');
+  assert.equal(single.outcome, 'match');
+  assert.equal(single.verification.entry.data.byte_offset, 26);
+  const spaced = Buffer.from('alpha beta', 'utf8');
+  const verbatim = ledger.verifyEvidence({ evidence_id: 'evd_ws', content: spaced, actor, request_id: 'req_ws_v' });
+  assert.equal(verbatim.outcome, 'mismatch');
+  const folded = ledger.verifyEvidence({ evidence_id: 'evd_ws', content: spaced, actor, request_id: 'req_ws_n', method: 'normalized' });
+  assert.equal(folded.outcome, 'match'); assert.equal(folded.verification.entry.data.method, 'normalized');
+  assert.equal(folded.verification.entry.data.occurrences, 1);
+  assert.equal(folded.verification.entry.data.passage_sha256, undefined);
+  assert.equal(ledger.show('evd_ws').entry.data.quote, 'Alpha  beta');
+});
+test('verification contract rejects bad shapes and wrong targets', t => {
+  const { ledger, actor } = verifySetup(t);
+  const bad = (data, request_id) => ({ version: 1, request_id, actor,
+    entries: [{ id: `bad_${request_id}`, type: 'verification', data }] });
+  const good = { target_evidence_id: 'evd_m', target_source_id: 'src_v', outcome: 'match', method: 'verbatim',
+    verified_at: '2026-09-27T00:00:00.000Z', searched_sha256: '0'.repeat(64), searched_bytes: 25,
+    passage_sha256: '1'.repeat(64), byte_offset: 6, byte_length: 13, occurrences: 1 };
+  assert.throws(() => ledger.capture(bad({ ...good, passage_sha256: undefined }, 'req_bad1')), code('VALIDATION'));
+  assert.throws(() => ledger.capture(bad({ target_evidence_id: 'evd_m', target_source_id: 'src_v',
+    outcome: 'unreachable', method: 'verbatim', verified_at: good.verified_at, detail: 'gone', searched_sha256: '0'.repeat(64) }, 'req_bad2')), code('VALIDATION'));
+  assert.throws(() => ledger.capture(bad({ ...good, target_source_id: 'src_x' }, 'req_bad3')), code('NOT_FOUND'));
+  ledger.capture(bundle([{ id: 'src_x', type: 'source', data: { title: 'other', medium: 'note', uri: 'urn:yurai:synthetic:other' } }], 'req_src_x'));
+  assert.throws(() => ledger.capture(bad({ ...good, target_source_id: 'src_x' }, 'req_bad4')), code('VALIDATION'));
+  ledger.capture(bad(good, 'req_good'));
+  assert.throws(() => ledger.capture(bad({ ...good, occurrences: 2 }, 'req_bad6')), code('VALIDATION'));
+  assert.throws(() => ledger.capture(bad({ ...good, occurrence_offsets: [6] }, 'req_bad7')), code('VALIDATION'));
+  const goodMulti = { target_evidence_id: 'evd_m', target_source_id: 'src_v', outcome: 'multiple', method: 'verbatim',
+    verified_at: good.verified_at, searched_sha256: good.searched_sha256, searched_bytes: 25,
+    occurrences: 2, occurrence_offsets: [0, 13] };
+  ledger.capture(bad(goodMulti, 'req_good_multi'));
+  assert.throws(() => ledger.capture(bad({ ...goodMulti, passage_sha256: '1'.repeat(64) }, 'req_bad8')), code('VALIDATION'));
+  const snap = ledger.exportSnapshot();
+  snap.entries.push({ id: 'bad_req_bad9', type: 'verification', data: { ...good, occurrences: 2 },
+    created_at: good.verified_at, actor });
+  snap.receipts.push({ request_id: 'req_bad9', digest: 'b'.repeat(64), ids: ['bad_req_bad9'] });
+  assert.throws(() => setup(t).ledger.importSnapshot(snap), code('VALIDATION'));
+  assert.throws(() => ledger.capture(bundle([{ id: 'rev_ver', type: 'review',
+    data: { target_id: 'bad_req_good', state: 'accepted', rationale: 'nope' } }], 'req_rev_ver')), code('VALIDATION'));
+  assert.throws(() => ledger.verifyEvidence({ evidence_id: 'missing', content: Buffer.from('x'), actor, request_id: 'req_nf' }), code('NOT_FOUND'));
+  ledger.capture(bundle([{ id: 'clm_plain', type: 'claim', data: { text: 'not evidence', kind: 'assertion', attributed_to: 't' } }], 'req_plain'));
+  assert.throws(() => ledger.verifyEvidence({ evidence_id: 'clm_plain', content: Buffer.from('x'), actor, request_id: 'req_wt' }), code('VALIDATION'));
+  ledger.capture(bundle([{ id: 'evd_ptr', type: 'evidence', data: { source_id: 'src_v', locator: 'page 1' } }], 'req_ptr'));
+  assert.throws(() => ledger.verifyEvidence({ evidence_id: 'evd_ptr', content: Buffer.from('page 1'), actor, request_id: 'req_pq' }), code('VALIDATION'));
+  assert.throws(() => ledger.verifyEvidence({ evidence_id: 'evd_ptr', content: null, detail: 'gone', actor, request_id: 'req_pq_null' }), code('VALIDATION'));
+  assert.throws(() => ledger.capture(bad({ ...good, target_evidence_id: 'evd_ptr' }, 'req_bad5')), code('VALIDATION'));
+  assert.throws(() => ledger.verifyEvidence({ evidence_id: 'evd_m', content: Buffer.alloc(4 * 1024 * 1024 + 1), actor, request_id: 'req_big' }), code('VALIDATION'));
+  assert.throws(() => ledger.verifyEvidence({ evidence_id: 'evd_m', content: Buffer.from([0xff]), actor, request_id: 'req_bin' }), code('VALIDATION'));
+  assert.throws(() => ledger.verifyEvidence({ evidence_id: 'evd_m', content: Buffer.from('x'), actor, request_id: 'req_bm', method: 'fuzzy' }), code('VALIDATION'));
+});
+test('verification separates adopted, match, and preservation states', t => {
+  const { ledger, actor } = verifySetup(t);
+  const sha = createHash('sha256').update('pinned bytes').digest('hex');
+  ledger.capture(bundle([{ id: 'src_pin', type: 'source', data: { title: 'pinned', medium: 'note',
+    uri: 'urn:yurai:synthetic:pinned', version: 'v9', content_sha256: sha, snapshot_uri: 'file:///snap/v9' } },
+    { id: 'evd_pin', type: 'evidence', data: { source_id: 'src_pin', quote: 'pinned passage' } }], 'req_pin'));
+  ledger.capture(bundle([{ id: 'rev_pin', type: 'review', data: { target_id: 'evd_pin', state: 'accepted', rationale: 'keep' } }], 'req_pin_rev'));
+  const checked = ledger.verifyEvidence({ evidence_id: 'evd_pin', content: Buffer.from('other bytes here'), actor,
+    request_id: 'req_pin_v', edition: 'v8' });
+  assert.equal(checked.outcome, 'mismatch');
+  const view = ledger.show('evd_pin');
+  assert.equal(view.state, 'accepted');
+  assert.equal(view.verification.outcome, 'mismatch');
+  assert.equal(view.verification.edition.agreement, 'mismatch');
+  assert.equal(view.verification.bytes.agreement, 'mismatch');
+  assert.equal(view.truth_evaluated, false);
+  assert.ok(view.warnings.includes('anchor_mismatch'));
+  ledger.capture(bundle([{ id: 'clm_pin', type: 'claim', data: { text: 'pinned finding', kind: 'assertion', attributed_to: 'test' } },
+    { id: 'asm_pin', type: 'assessment', data: { claim_id: 'clm_pin', evidence_id: 'evd_pin', stance: 'reports', rationale: 'r' } }], 'req_pin_link'));
+  const found = ledger.search('pinned passage', { expand: 'evidence' });
+  assert.equal(found.items.length, 1);
+  assert.equal(found.items[0].via[0].evidence.verification.outcome, 'mismatch');
+  assert.equal(found.truth_evaluated, false);
+});
+test('verification survives export/restore and replays idempotently', t => {
+  const { ledger, actor } = verifySetup(t);
+  const first = ledger.verifyEvidence({ evidence_id: 'evd_m', content: Buffer.from('begin QV exact span end', 'utf8'),
+    actor, request_id: 'req_replay' });
+  assert.equal(first.replayed, false);
+  const again = ledger.verifyEvidence({ evidence_id: 'evd_m', content: Buffer.from('begin QV exact span end', 'utf8'),
+    actor, request_id: 'req_replay' });
+  assert.equal(again.replayed, true); assert.deepEqual(again.ids, first.ids);
+  const dry = ledger.verifyEvidence({ evidence_id: 'evd_x', content: Buffer.from('QV twice', 'utf8'),
+    actor, request_id: 'req_dry_v', dryRun: true });
+  assert.equal(dry.dry_run, true); assert.equal(dry.outcome, 'match');
+  assert.equal(ledger.show('evd_x').verification, null);
+  const other = setup(t);
+  other.ledger.importSnapshot(ledger.exportSnapshot());
+  assert.equal(other.ledger.show('evd_m').verification.outcome, 'match');
+  assert.equal(other.ledger.show('evd_m').verification.id, first.verification.entry.id);
+});
+test('verification replay survives an advancing clock but still conflicts on change', t => {
+  const store = new SqliteStore(':memory:', true);
+  t.after(() => store.close());
+  let tick = 0;
+  const ledger = new Ledger(store, () => new Date(Date.parse('2026-09-27T00:00:00.000Z') + (tick++) * 1000).toISOString());
+  ledger.capture(bundle([
+    { id: 'src_c', type: 'source', data: { title: 'clock', medium: 'note', uri: 'urn:yurai:synthetic:clock' } },
+    { id: 'evd_c', type: 'evidence', data: { source_id: 'src_c', quote: 'QV exact span', prefix: 'begin ', suffix: ' end' } }], 'req_clock_seed'));
+  const bytes = Buffer.from('begin QV exact span end', 'utf8');
+  const first = ledger.verifyEvidence({ evidence_id: 'evd_c', content: bytes, actor, request_id: 'req_clock' });
+  assert.equal(first.replayed, false);
+  const again = ledger.verifyEvidence({ evidence_id: 'evd_c', content: bytes, actor, request_id: 'req_clock' });
+  assert.equal(again.replayed, true);
+  assert.deepEqual(again.ids, first.ids);
+  assert.equal(again.outcome, 'match');
+  assert.equal(again.verification.entry.data.verified_at, first.verification.entry.data.verified_at);
+  assert.throws(() => ledger.verifyEvidence({ evidence_id: 'evd_c', content: Buffer.from('changed bytes', 'utf8'),
+    actor, request_id: 'req_clock' }), code('CONFLICT'));
+  assert.throws(() => ledger.verifyEvidence({ evidence_id: 'evd_c', content: bytes,
+    actor: { kind: 'agent', id: 'other-agent' }, request_id: 'req_clock' }), code('CONFLICT'));
+});
+test('verification replay rejects receipts that bundle extra records', t => {
+  const { ledger, actor } = verifySetup(t);
+  const content = Buffer.from('begin QV exact span end', 'utf8');
+  const sha = b => createHash('sha256').update(b).digest('hex');
+  const vdata = verified_at => ({ target_evidence_id: 'evd_m', target_source_id: 'src_v', outcome: 'match',
+    method: 'verbatim', verified_at, searched_sha256: sha(content), searched_bytes: content.length,
+    passage_sha256: sha(Buffer.from('QV exact span', 'utf8')), byte_offset: 6, byte_length: 13, occurrences: 1 });
+  const vrid = request_id => `vrf_${createHash('sha256').update(request_id).digest('hex')}`;
+  ledger.capture({ version: 1, request_id: 'req_collision', actor, entries: [
+    { id: vrid('req_collision'), type: 'verification', data: vdata('2026-09-27T00:00:00.000Z') },
+    { id: 'clm_rider', type: 'claim', data: { text: 'rider', kind: 'assertion', attributed_to: 't' } }] });
+  assert.throws(() => ledger.verifyEvidence({ evidence_id: 'evd_m', content, actor, request_id: 'req_collision' }), code('CONFLICT'));
+  ledger.capture({ version: 1, request_id: 'req_single', actor, entries: [
+    { id: vrid('req_single'), type: 'verification', data: vdata('2026-09-26T00:00:00.000Z') }] });
+  const replay = ledger.verifyEvidence({ evidence_id: 'evd_m', content, actor, request_id: 'req_single' });
+  assert.equal(replay.replayed, true);
+  assert.deepEqual(replay.ids, [vrid('req_single')]);
+  const dry = ledger.verifyEvidence({ evidence_id: 'evd_m', content, actor, request_id: 'req_single', dryRun: true });
+  assert.equal(dry.replayed, true);
+  assert.equal(dry.dry_run, true);
+});
+test('verification keeps byte offsets on the searched-bytes coordinate for BOM files', t => {
+  const { ledger, actor } = verifySetup(t);
+  const content = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('begin QV exact span end', 'utf8')]);
+  const checked = ledger.verifyEvidence({ evidence_id: 'evd_m', content, actor, request_id: 'req_bom' });
+  assert.equal(checked.outcome, 'match');
+  const data = checked.verification.entry.data;
+  assert.equal(data.byte_offset, 9);
+  assert.equal(data.byte_length, 13);
+  assert.equal(content.slice(data.byte_offset, data.byte_offset + data.byte_length).toString('utf8'), 'QV exact span');
+  assert.equal(data.searched_sha256, createHash('sha256').update(content).digest('hex'));
+});
+test('normalized matching keeps affix boundaries across folded whitespace', t => {
+  const { ledger, actor } = verifySetup(t);
+  const folded = ledger.verifyEvidence({ evidence_id: 'evd_m', content: Buffer.from('BEGIN\nQV  exact span\tEND', 'utf8'),
+    actor, request_id: 'req_norm_aff', method: 'normalized' });
+  assert.equal(folded.outcome, 'match');
+  assert.equal(folded.verification.entry.data.occurrences, 1);
+  const wrong = ledger.verifyEvidence({ evidence_id: 'evd_m', content: Buffer.from('OTHER\nQV  exact span\tEND', 'utf8'),
+    actor, request_id: 'req_norm_aff2', method: 'normalized' });
+  assert.equal(wrong.outcome, 'mismatch');
+});
+test('v1 ledgers migrate forward with order and data intact', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'yurai-'));
+  const path = join(dir, 'v1.sqlite');
+  const v1 = new DatabaseSync(path);
+  v1.exec(readFileSync(new URL('./fixtures/v1-schema.sql', import.meta.url), 'utf8'));
+  const at = '2026-09-27T00:00:00.000Z', actor = '{"kind":"human","id":"seed"}';
+  v1.exec(`INSERT INTO records(id,type,body,actor,created_at) VALUES
+    ('src_v1','source','{"title":"v1 source","medium":"note","uri":"urn:yurai:synthetic:v1"}','${actor}','${at}'),
+    ('clm_v1','claim','{"text":"v1 claim","kind":"assertion","attributed_to":"seed"}','${actor}','${at}'),
+    ('evd_v1','evidence','{"source_id":"src_v1","quote":"v1 quoted passage"}','${actor}','${at}');
+    INSERT INTO links(from_id,to_id,role) VALUES ('evd_v1','src_v1','source');
+    INSERT INTO lookup(id,kind,text) VALUES ('src_v1','source','v1 source\nurn:yurai:synthetic:v1'),('clm_v1','claim','v1 claim');
+    INSERT INTO receipts(request_id,digest,ids) VALUES ('req_v1seed','0','["src_v1","clm_v1","evd_v1"]');`);
+  v1.close();
+  const store = new SqliteStore(path);
+  // One hook with explicit order: after-hooks run FIFO, and Windows refuses to
+  // remove the directory while the database file is still open.
+  t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
+  assert.equal(store.schemaVersion(), 2);
+  const ledger = new Ledger(store, () => at);
+  assert.deepEqual(store.entries().map(e => e.id), ['src_v1', 'clm_v1', 'evd_v1']);
+  assert.equal(ledger.search('v1 claim').items.length, 1);
+  const checked = ledger.verifyEvidence({ evidence_id: 'evd_v1', content: Buffer.from('a v1 quoted passage here', 'utf8'),
+    actor: { kind: 'human', id: 'seed' }, request_id: 'req_v1verify' });
+  assert.equal(checked.outcome, 'match');
+  assert.equal(store.doctor().ok, true);
+  const raw2 = new DatabaseSync(path);
+  assert.throws(() => raw2.exec("UPDATE records SET body='{}'"), /immutable/);
+  raw2.close();
 });

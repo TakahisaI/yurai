@@ -13,6 +13,12 @@ export interface Bodies {
   relation: { from_claim_id: string; to_claim_id: string;
     relation: 'supports' | 'contradicts' | 'qualifies' | 'extends' | 'related' | 'supersedes'; rationale: string };
   review: { target_id: string; state: State; rationale: string };
+  verification: { target_evidence_id: string; target_source_id: string;
+    outcome: 'match' | 'mismatch' | 'multiple' | 'unreachable';
+    method: 'verbatim' | 'normalized'; verified_at: string; detail?: string;
+    searched_sha256?: string; searched_bytes?: number;
+    passage_sha256?: string; byte_offset?: number; byte_length?: number;
+    occurrences?: number; occurrence_offsets?: number[]; edition?: string };
 }
 export type Kind = keyof Bodies;
 export type Input = { [K in Kind]: { id: string; type: K; data: Bodies[K] } }[Kind];
@@ -29,8 +35,10 @@ export function fail(code: string, message: string): never { throw new LedgerErr
 // and `yurai schema`; unknown keys fail instead of silently discarding agent input.
 type Schema = { type?: string; const?: unknown; enum?: readonly string[]; properties?: Record<string, Schema>;
   required?: string[]; additionalProperties?: false | Schema; items?: Schema; oneOf?: Schema[];
-  minLength?: number; maxLength?: number; pattern?: string; minItems?: number; maxItems?: number };
+  minLength?: number; maxLength?: number; pattern?: string; minItems?: number; maxItems?: number;
+  minimum?: number; maximum?: number };
 const text = (max = 8000): Schema => ({ type: 'string', minLength: 1, maxLength: max });
+const integer = (minimum = 0, maximum = 9007199254740991): Schema => ({ type: 'integer', minimum, maximum });
 const choice = (...values: string[]): Schema => ({ type: 'string', enum: values });
 const object = (properties: Record<string, Schema>, required = Object.keys(properties)): Schema =>
   ({ type: 'object', properties, required, additionalProperties: false });
@@ -54,6 +62,12 @@ const bodySchemas: Record<Kind, Schema> = {
   relation: object({ from_claim_id: id, to_claim_id: id,
     relation: choice('supports', 'contradicts', 'qualifies', 'extends', 'related', 'supersedes'), rationale: text() }),
   review: object({ target_id: id, state: choice('proposed', 'accepted', 'rejected', 'withdrawn'), rationale: text() }),
+  verification: object({ target_evidence_id: id, target_source_id: id,
+    outcome: choice('match', 'mismatch', 'multiple', 'unreachable'), method: choice('verbatim', 'normalized'),
+    verified_at: timestamp, detail: text(2000), searched_sha256: hash, searched_bytes: integer(),
+    passage_sha256: hash, byte_offset: integer(), byte_length: integer(1), occurrences: integer(1),
+    occurrence_offsets: array(integer(), 0, 50), edition: text(500) },
+    ['target_evidence_id', 'target_source_id', 'outcome', 'method', 'verified_at']),
 };
 const kinds = Object.keys(bodySchemas) as Kind[];
 const inputSchemas = kinds.map(type => object({ id, type: { const: type }, data: bodySchemas[type] }));
@@ -82,6 +96,10 @@ function validate(value: unknown, schema: Schema, path: string): void {
     if (s.length < (schema.minLength ?? 0) || s.length > (schema.maxLength ?? Infinity)) bad('invalid length');
     if (schema.pattern && !new RegExp(schema.pattern, 'u').test(s)) bad('invalid format');
     if (schema.enum && !schema.enum.includes(s)) bad(`must be one of ${schema.enum.join(', ')}`);
+  } else if (schema.type === 'integer') {
+    if (typeof value !== 'number' || !Number.isInteger(value)) bad('must be an integer');
+    const n = value as number;
+    if (n < (schema.minimum ?? -Infinity) || n > (schema.maximum ?? Infinity)) bad('out of range');
   } else if (schema.type === 'array') {
     if (!Array.isArray(value)) bad('must be an array');
     const a = value as unknown[];
@@ -115,6 +133,32 @@ function semantic(input: Input): void {
   }
   if (input.type === 'relation' && input.data.from_claim_id === input.data.to_claim_id)
     fail('VALIDATION', `${input.id}: self-relations are not allowed`);
+  if (input.type === 'verification') {
+    const d = input.data, no = (...keys: (keyof typeof d)[]) => keys.some(k => d[k] !== undefined);
+    if (!validTime(d.verified_at)) fail('VALIDATION', `${input.id}: invalid verified_at`);
+    if (d.outcome === 'unreachable') {
+      if (!d.detail) fail('VALIDATION', `${input.id}: unreachable needs a reason in detail`);
+      if (no('searched_sha256', 'searched_bytes', 'passage_sha256', 'byte_offset', 'byte_length', 'occurrences', 'occurrence_offsets'))
+        fail('VALIDATION', `${input.id}: unreachable records no checked bytes`);
+    } else {
+      if (d.searched_sha256 === undefined || d.searched_bytes === undefined)
+        fail('VALIDATION', `${input.id}: checked outcomes pin the searched bytes`);
+      if (d.outcome === 'match' && (d.occurrences !== 1
+        || (d.method === 'verbatim' && (d.passage_sha256 === undefined || d.byte_offset === undefined || d.byte_length === undefined))))
+        fail('VALIDATION', `${input.id}: match pins one passage`);
+      if (d.outcome === 'match' && no('occurrence_offsets'))
+        fail('VALIDATION', `${input.id}: match lists no candidates`);
+      if (d.outcome === 'multiple' && (d.occurrences === undefined || d.occurrences < 2
+        || (d.method === 'verbatim' && !d.occurrence_offsets?.length)))
+        fail('VALIDATION', `${input.id}: multiple pins candidates`);
+      if (d.outcome === 'multiple' && no('passage_sha256', 'byte_offset', 'byte_length'))
+        fail('VALIDATION', `${input.id}: multiple pins no single passage`);
+      if (d.outcome === 'mismatch' && no('passage_sha256', 'byte_offset', 'byte_length', 'occurrences', 'occurrence_offsets'))
+        fail('VALIDATION', `${input.id}: mismatch references no passage`);
+      if (d.method === 'normalized' && no('passage_sha256', 'byte_offset', 'byte_length', 'occurrence_offsets'))
+        fail('VALIDATION', `${input.id}: normalized offsets do not map to source bytes`);
+    }
+  }
 }
 function validTime(t: string): boolean {
   const n = Date.parse(t);
@@ -140,6 +184,8 @@ export function references(input: Input): { id: string; role: string; kind: Kind
     case 'relation': return [{ id: input.data.from_claim_id, role: 'from', kind: 'claim' },
       { id: input.data.to_claim_id, role: 'to', kind: 'claim' }];
     case 'review': return [{ id: input.data.target_id, role: 'target', kind: 'reviewable' }];
+    case 'verification': return [{ id: input.data.target_evidence_id, role: 'evidence', kind: 'evidence' },
+      { id: input.data.target_source_id, role: 'source', kind: 'source' }];
     default: return [];
   }
 }

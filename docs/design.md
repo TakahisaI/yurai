@@ -64,6 +64,7 @@ Hold verbatim text in quote and summaries in paraphrase, separately. prefix/suff
 A locator may start as any string a human can use to rediscover the passage; typed selectors come later.
 
 v0 does not match quotations against sources. Evidence always returns as `anchor_not_verified`.
+Since schema v2, `verify` records quotation checks; see contract §"Verifying a quotation" and ADR 0004.
 An "accepted Evidence" is not the same as an "Evidence matched against its source."
 
 ### Assessment — how that passage is interpreted

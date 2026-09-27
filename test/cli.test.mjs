@@ -42,7 +42,9 @@ test('missing DB, malformed input, misuse and unknown fields are explicit failur
 });
 test('CLI consumes stdin and schema is machine readable without a DB', t => {
   const { db, run } = setup(t);
-  assert.equal(JSON.parse(run(['schema','record']).stdout).oneOf.length, 6);
+  const shapes = JSON.parse(run(['schema','record']).stdout).oneOf;
+  assert.equal(shapes.length, 7);
+  assert.equal(shapes.find(s => s.properties.type.const === 'verification').properties.data.properties.outcome.enum.length, 4);
   assert.equal(existsSync(db), false);
   run(['init']);
   const record = { id: 'clm_stdin', type: 'claim', data: { text: '日本語テスト', kind: 'hypothesis', attributed_to: 'test' } };
@@ -100,4 +102,58 @@ test('CLI rejects bad expanded-search usage', t => {
   run(['init']);
   assert.equal(run(['search','ZKQ','--expand','bogus']).status, 2);
   assert.equal(run(['search','ZKQ','--kind','source','--expand','evidence']).status, 2);
+});
+function seedVerify(t) {
+  const { dir, run } = setup(t);
+  run(['init']);
+  const bundle = { version: 1, request_id: 'req_cli_verify_seed', actor: { kind: 'human', id: 'cli' }, entries: [
+    { id: 'src_cli', type: 'source', data: { title: 'local file', medium: 'note', uri: 'urn:yurai:synthetic:cli', version: 'v1' } },
+    { id: 'evd_cli', type: 'evidence', data: { source_id: 'src_cli', quote: 'the checkable line' } },
+    { id: 'evd_ptr', type: 'evidence', data: { source_id: 'src_cli', locator: 'page 9' } },
+    { id: 'clm_cli', type: 'claim', data: { text: 'file finding', kind: 'assertion', attributed_to: 'cli' } }] };
+  const file = join(dir, 'bundle.json'); writeFileSync(file, JSON.stringify(bundle));
+  assert.equal(run(['capture','--file',file]).status, 0);
+  return { dir, run };
+}
+test('CLI verifies a quote against a local file end to end', t => {
+  const { dir, run } = seedVerify(t);
+  const target = join(dir, 'source.txt'); writeFileSync(target, 'before\nthe checkable line\nafter\n');
+  const match = run(['verify','evd_cli','--file',target,'--edition','v1','--request-id','req_cli_v1']);
+  assert.equal(match.status, 0, match.stderr);
+  assert.equal(JSON.parse(match.stdout).outcome, 'match');
+  const shown = JSON.parse(run(['show','evd_cli']).stdout);
+  assert.ok(shown.warnings.includes('anchor_match'));
+  assert.equal(shown.verification.outcome, 'match');
+  assert.equal(shown.verification.edition.agreement, 'match');
+  writeFileSync(target, 'rewritten without the line\n');
+  const miss = run(['verify','evd_cli','--file',target,'--request-id','req_cli_v2']);
+  assert.equal(JSON.parse(miss.stdout).outcome, 'mismatch');
+  assert.equal(JSON.parse(run(['show','evd_cli']).stdout).verification.outcome, 'mismatch');
+  const gone = run(['verify','evd_cli','--file',join(dir,'missing.txt'),'--request-id','req_cli_v3']);
+  assert.equal(gone.status, 0, gone.stderr);
+  assert.equal(JSON.parse(gone.stdout).outcome, 'unreachable');
+  assert.ok(JSON.parse(run(['show','evd_cli']).stdout).warnings.includes('anchor_unreachable'));
+  assert.equal(JSON.parse(run(['doctor']).stdout).ok, true);
+});
+test('CLI records unreachable for overlong paths without validation failure', t => {
+  const { dir, run } = seedVerify(t);
+  const long = join(dir, `${'p'.repeat(2100)}.txt`);
+  const gone = run(['verify','evd_cli','--file',long,'--request-id','req_cli_long']);
+  assert.equal(gone.status, 0, gone.stderr);
+  assert.equal(JSON.parse(gone.stdout).outcome, 'unreachable');
+  assert.ok(JSON.parse(gone.stdout).verification.entry.data.detail.length <= 2000);
+});
+test('CLI rejects bad verify usage and undecodable input', t => {
+  const { dir, run } = seedVerify(t);
+  assert.equal(run(['verify','evd_cli']).status, 2);
+  const target = join(dir, 'source.txt'); writeFileSync(target, 'the checkable line\n');
+  assert.equal(run(['verify','evd_cli','--file',target,'--method','fuzzy']).status, 2);
+  assert.equal(run(['verify','clm_cli','--file',target]).status, 2);
+  assert.equal(run(['verify','evd_ptr','--file',target]).status, 2);
+  assert.equal(run(['verify','evd_ptr','--file',join(dir,'missing.txt')]).status, 2);
+  assert.equal(run(['search','x','--edition','v1']).status, 2);
+  writeFileSync(join(dir, 'binary.dat'), Buffer.from([0xff, 0xfe]));
+  assert.equal(run(['verify','evd_cli','--file',join(dir,'binary.dat')]).status, 2);
+  const big = join(dir, 'big.txt'); writeFileSync(big, Buffer.alloc(4 * 1024 * 1024 + 1, 'x'));
+  assert.equal(run(['verify','evd_cli','--file',big]).status, 2);
 });
