@@ -130,3 +130,25 @@ test('retrieval eval: withdrawn evidence path keeps full states on the audit pat
   assert.ok(item.via.length > 0);
   assert.equal(item.via[0].evidence.state, 'withdrawn');
 });
+
+test('retrieval eval: withdrawn assessment path keeps full states on the audit path', t => {
+  const { store, ledgerApi } = setup();
+  t.after(() => store.close());
+  const result = ledgerApi.search('WDASMTERM', { expand: 'evidence', includeInactive: true });
+  const item = result.items.find(i => i.entry.id === 'clm_eval_drop');
+  assert.ok(item);
+  assert.ok(item.via.length > 0);
+  assert.equal(item.via[0].assessment.state, 'withdrawn');
+  assert.equal(item.via[0].evidence.state, 'proposed');
+});
+
+test('retrieval eval: withdrawn source path keeps full states on the audit path', t => {
+  const { store, ledgerApi } = setup();
+  t.after(() => store.close());
+  const result = ledgerApi.search('WDSRCTERM', { expand: 'evidence', includeInactive: true });
+  const item = result.items.find(i => i.entry.id === 'clm_eval_drop');
+  assert.ok(item);
+  assert.ok(item.via.length > 0);
+  assert.equal(item.via[0].source.state, 'withdrawn');
+  assert.equal(item.via[0].evidence.state, 'proposed');
+});
