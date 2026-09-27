@@ -46,7 +46,8 @@ function buildLedger({ claims, evdPerClaim, asmPerEvd, reviewsPerClaim, verifica
     }
     const src = `src_m${String(c - (c % 10)).padStart(4, '0')}`;
     const clm = `clm_m${String(c).padStart(4, '0')}`;
-    entries.push({ id: clm, type: 'claim', data: { text: `架空所見${c}：${pick()}と${pick()}の関係 COMMONTERM CLAIMRARE${c}`, kind: 'assertion', attributed_to: 'synthetic' } });
+    // 気孔 in every claim holds the 2-char probe at the 50-result cap on all shapes.
+    entries.push({ id: clm, type: 'claim', data: { text: `架空所見${c}：気孔と${pick()}の関係 COMMONTERM CLAIMRARE${c}`, kind: 'assertion', attributed_to: 'synthetic' } });
     counts.claim++;
     for (let e = 0; e < evdPerClaim; e++) {
       const evd = `${clm}_e${e}`;
@@ -106,27 +107,32 @@ for (const shape of SCALES) {
   const directShort = time(() => ledger.search('気孔', { limit: 50 }));
   const expanded = time(() => ledger.search('RARE7_0', { limit: 50, expand: 'evidence' }));
   const show = time(() => ledger.show('clm_m0007'));
-  const t0 = performance.now();
-  const snapshot = ledger.exportSnapshot();
-  const exportMs = performance.now() - t0;
-  const snapshotJson = JSON.stringify(snapshot);
-  const dir2 = mkdtempSync(join(tmpdir(), 'yurai-scale-'));
-  const store2 = new SqliteStore(join(dir2, 'ledger.sqlite'), true);
+  const exportTimed = time(() => ledger.exportSnapshot());
+  // Byte size uses the exact CLI export serialization the 16 MiB gate measures.
+  const snapshotJson = `${JSON.stringify(ledger.exportSnapshot(), null, 2)}\n`;
   const parsed = JSON.parse(snapshotJson);
-  const t1 = performance.now();
-  new Ledger(store2).importSnapshot(parsed);
-  const importMs = performance.now() - t1;
-  store2.close();
+  const importSamples = [];
+  for (let i = 0; i < 5; i++) {
+    const target = mkdtempSync(join(tmpdir(), 'yurai-scale-'));
+    const store2 = new SqliteStore(join(target, 'ledger.sqlite'), true);
+    const ledger2 = new Ledger(store2);
+    const t1 = performance.now();
+    ledger2.importSnapshot(parsed);
+    importSamples.push(performance.now() - t1);
+    store2.close();
+    rmSync(target, { recursive: true, force: true });
+  }
+  importSamples.sort((a, b) => a - b);
+  const importTimed = { median_ms: importSamples[2], max_ms: importSamples[4] };
   // Capture probes run last so export/import match the advertised counts.
   let probe = 0;
   const capture = time(() => ledger.capture({ version: 1, request_id: `req_probe_${shape.name}_${probe}`, actor,
     entries: [{ id: `clm_probe_${shape.name}_${probe++}`, type: 'claim', data: { text: 'probe', kind: 'assertion', attributed_to: 'syn' } }] }));
   report.scales.push({ shape: shape.name, counts, build_ms: Math.round(buildMs),
     direct_common: directCommon, direct_rare: directRare, direct_short_2char: directShort, expanded, show, capture_single: capture,
-    export_ms: Math.round(exportMs), export_bytes: Buffer.byteLength(snapshotJson, 'utf8'),
-    import_ms: Math.round(importMs) });
+    export: exportTimed, export_bytes: Buffer.byteLength(snapshotJson, 'utf8'),
+    import: importTimed });
   store.close();
   rmSync(dir, { recursive: true, force: true });
-  rmSync(dir2, { recursive: true, force: true });
 }
 console.log(JSON.stringify(report, null, 1));
