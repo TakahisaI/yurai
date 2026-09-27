@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { fail, matchedEvidenceFields, normalize, pageBounds, parseBundle, parseSnapshot, references } from './model.js';
+import { LedgerError, fail, matchedEvidenceFields, normalize, pageBounds, parseBundle, parseSnapshot, references } from './model.js';
 import type { Actor, Entry, EvidenceField, Input, Snapshot, State } from './model.js';
 import type { Store } from './ports.js';
 import { MAX_VERIFY_BYTES, matchQuote } from './verify.js';
@@ -14,6 +14,7 @@ function digest(value: unknown): string { return createHash('sha256').update(can
 function sameVerifier(stored: Actor, claimed: { kind: string; id: string; model?: string }): boolean {
   return stored.kind === claimed.kind && stored.id === claimed.id && (stored.model ?? null) === (claimed.model ?? null);
 }
+type VerificationData = Extract<Input, { type: 'verification' }>['data'];
 export class Ledger {
   constructor(private readonly store: Store, private readonly now = () => new Date().toISOString()) {}
   private required(id: string): Entry { return this.store.get(id) ?? fail('NOT_FOUND', `No record: ${id}`); }
@@ -113,8 +114,7 @@ export class Ledger {
     if (!quote) fail('VALIDATION', `${evidence_id}: evidence has no quote to match`);
     const id = `vrf_${createHash('sha256').update(input.request_id).digest('hex')}`;
     const verified_at = this.now();
-    type Data = Extract<Input, { type: 'verification' }>['data'];
-    let data: Data;
+    let data: VerificationData;
     if (content === null) {
       data = { target_evidence_id: evidence_id, target_source_id: evidence.data.source_id, outcome: 'unreachable',
         method, verified_at, detail: detail ?? 'No checkable content was provided', ...(edition === undefined ? {} : { edition }) };
@@ -144,21 +144,36 @@ export class Ledger {
           occurrence_offsets: found.offsets.slice(0, 50).map(at => Buffer.byteLength(text.slice(0, at))) };
       }
     }
-    const receipt = this.store.receipt(input.request_id);
-    if (receipt) {
-      const stored = this.store.get(id);
-      // verified_at is the retry's own timestamp, not functional content: the same
-      // verification by the same verifier under a new timestamp replays instead of conflicting.
-      if (stored?.type === 'verification' && sameVerifier(stored.actor, input.actor)
-        && canonical({ ...stored.data, verified_at: '' }) === canonical({ ...data, verified_at: '' }))
-        return { ...receipt, replayed: true, dry_run: input.dryRun ?? false,
-          outcome: stored.data.outcome, verification: this.view(stored) };
+    try {
+      const result = this.capture({ version: 1, actor: input.actor, request_id: input.request_id,
+        entries: [{ id, type: 'verification', data }] }, input.dryRun ?? false);
+      // capture() above already validated the actor; the preview below only renders it.
+      const entry = this.store.get(id) ?? { id, type: 'verification' as const, data, created_at: verified_at, actor: input.actor as Actor };
+      return { ...result, outcome: data.outcome, verification: this.view(entry) };
+    } catch (error) {
+      // capture() conflicts on the retry's own timestamp; the same single
+      // verification by the same verifier still replays. The failed attempt
+      // already observed the winner's committed receipt, so this re-read
+      // serializes after concurrent retries instead of racing them.
+      if (error instanceof LedgerError && error.code === 'CONFLICT') {
+        const replay = this.verifyReplay(input.request_id, id, data, input.actor, input.dryRun ?? false);
+        if (replay) return replay;
+      }
+      throw error;
     }
-    const result = this.capture({ version: 1, actor: input.actor, request_id: input.request_id,
-      entries: [{ id, type: 'verification', data }] }, input.dryRun ?? false);
-    // capture() above already validated the actor; the preview below only renders it.
-    const entry = this.store.get(id) ?? { id, type: 'verification' as const, data, created_at: verified_at, actor: input.actor as Actor };
-    return { ...result, outcome: data.outcome, verification: this.view(entry) };
+  }
+  private verifyReplay(request_id: string, id: string, data: VerificationData,
+    actor: { kind: string; id: string; model?: string }, dryRun: boolean) {
+    const receipt = this.store.receipt(request_id);
+    if (!receipt || receipt.ids.length !== 1 || receipt.ids[0] !== id) return null;
+    const stored = this.store.get(id);
+    // verified_at is the retry's own timestamp, not functional content: only a
+    // receipt pointing at exactly this verification can replay it.
+    if (stored?.type === 'verification' && sameVerifier(stored.actor, actor)
+      && canonical({ ...stored.data, verified_at: '' }) === canonical({ ...data, verified_at: '' }))
+      return { ...receipt, replayed: true, dry_run: dryRun,
+        outcome: stored.data.outcome, verification: this.view(stored) };
+    return null;
   }
   search(query: string, options: { kind?: 'claim' | 'source'; limit?: number; offset?: number; includeInactive?: boolean; expand?: 'evidence' } = {}) {
     const { kind = 'claim', limit = 20, offset = 0, includeInactive = false, expand } = options;

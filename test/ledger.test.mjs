@@ -542,6 +542,27 @@ test('verification replay survives an advancing clock but still conflicts on cha
   assert.throws(() => ledger.verifyEvidence({ evidence_id: 'evd_c', content: bytes,
     actor: { kind: 'agent', id: 'other-agent' }, request_id: 'req_clock' }), code('CONFLICT'));
 });
+test('verification replay rejects receipts that bundle extra records', t => {
+  const { ledger, actor } = verifySetup(t);
+  const content = Buffer.from('begin QV exact span end', 'utf8');
+  const sha = b => createHash('sha256').update(b).digest('hex');
+  const vdata = verified_at => ({ target_evidence_id: 'evd_m', target_source_id: 'src_v', outcome: 'match',
+    method: 'verbatim', verified_at, searched_sha256: sha(content), searched_bytes: content.length,
+    passage_sha256: sha(Buffer.from('QV exact span', 'utf8')), byte_offset: 6, byte_length: 13, occurrences: 1 });
+  const vrid = request_id => `vrf_${createHash('sha256').update(request_id).digest('hex')}`;
+  ledger.capture({ version: 1, request_id: 'req_collision', actor, entries: [
+    { id: vrid('req_collision'), type: 'verification', data: vdata('2026-09-27T00:00:00.000Z') },
+    { id: 'clm_rider', type: 'claim', data: { text: 'rider', kind: 'assertion', attributed_to: 't' } }] });
+  assert.throws(() => ledger.verifyEvidence({ evidence_id: 'evd_m', content, actor, request_id: 'req_collision' }), code('CONFLICT'));
+  ledger.capture({ version: 1, request_id: 'req_single', actor, entries: [
+    { id: vrid('req_single'), type: 'verification', data: vdata('2026-09-26T00:00:00.000Z') }] });
+  const replay = ledger.verifyEvidence({ evidence_id: 'evd_m', content, actor, request_id: 'req_single' });
+  assert.equal(replay.replayed, true);
+  assert.deepEqual(replay.ids, [vrid('req_single')]);
+  const dry = ledger.verifyEvidence({ evidence_id: 'evd_m', content, actor, request_id: 'req_single', dryRun: true });
+  assert.equal(dry.replayed, true);
+  assert.equal(dry.dry_run, true);
+});
 test('verification keeps byte offsets on the searched-bytes coordinate for BOM files', t => {
   const { ledger, actor } = verifySetup(t);
   const content = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('begin QV exact span end', 'utf8')]);
