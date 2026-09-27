@@ -43,7 +43,8 @@ Up to 200 records / 1 MiB. `--file -` reads stdin too.
 | add | Wrap a single record into capture |
 | review | Generate a Review record and capture it |
 | search | Claim-centered literal AND search. kind=source searches Sources |
-| show | Display the target, latest Review, direct references, connections, and each Evidence's Source |
+| show ID | Display the target, latest Review, direct references, connections, and each Evidence's Source |
+| show --request-id ID | Inspect records created by one persisted capture, their immediate grounds, and current states |
 | export | Write a ledger snapshot to stdout |
 | import | Restore a snapshot into an empty ledger. Not a merge with existing data |
 | doctor | Structural integrity of SQLite/FKs/search index. Not truth adjudication of content |
@@ -51,6 +52,33 @@ Up to 200 records / 1 MiB. `--file -` reads stdin too.
 `--db` works on every command. Other flags work only on the operations shown in `--help`.
 search/show limit defaults to 20, max 100. offset is 0–1,000,000. next_offset=null ends that search/connection page.
 Search terms allow up to 500 chars and 16 whitespace-separated terms. FTS OR/NOT and SQL wildcards are not interpreted.
+
+## Inspecting one capture
+
+`show --request-id REQUEST_ID [--limit N] [--offset N]` selects a persisted receipt;
+it cannot be combined with a positional record ID. Core exposes
+`Ledger.inspectCapture(requestId, limit = 20, offset = 0)`. Existing `show ID`
+behavior is unchanged, and schema/Store contracts remain v1.
+
+Returns `request_id`, `digest`, `total`, `items`, `next_offset`,
+`states_as_of: "inspection"`, and `truth_evaluated: false`. Each item includes its
+original entry, current review/state/warnings, direct references, and the Source
+of referenced Evidence. Items follow the receipt's original ID order; inactive
+members are not filtered. Total counts members, not expanded dependencies.
+
+This is a view of what that request created, not every later relationship touching
+those records. Use `show ID` and its connection pages for that history. Membership
+and Review event bodies are immutable; effective states are current at inspection
+time, not a historical replay. A Review's decision is `entry.data.state`; its target's
+current working state can now differ. No capture-level accepted state is inferred.
+
+The operation writes no records, reviews, receipts, or index data. The existing
+SQLite connection/transaction behavior is unchanged; this is not an OS read-only
+mode. No full-ledger scan is required. Limits are the same as show/search. Past-end
+pages contain an empty items array and null next_offset. Unknown receipts (including
+uncommitted dry-runs) return NOT_FOUND; malformed selectors/page bounds return
+VALIDATION or USAGE. Receipts restored from v1 snapshots remain inspectable;
+their digests are replay metadata, not authenticated proof of origin.
 
 ## States and corrections
 

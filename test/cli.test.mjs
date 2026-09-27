@@ -50,3 +50,34 @@ test('CLI consumes stdin and schema is machine readable without a DB', t => {
   assert.equal(result.status, 0, result.stderr);
   assert.equal(JSON.parse(run(['search','日本語']).stdout).items[0].entry.actor.kind, 'agent');
 });
+
+test('CLI inspects a capture by request ID, with bounded pages and no mutation', t => {
+  const { run } = setup(t);
+  run(['init']);
+  run(['capture','--file','examples/dogfood/01-capture.json']);
+  run(['capture','--file','examples/dogfood/02-correct.json']);
+  const before = run(['export']).stdout;
+  const result = run(['show','--request-id','req_fixture_initial','--limit','3']);
+  assert.equal(result.status, 0, result.stderr);
+  const page = JSON.parse(result.stdout);
+  assert.equal(page.total, 10); assert.equal(page.items.length, 3); assert.equal(page.next_offset, 3);
+  const next = JSON.parse(run(['show','--request-id','req_fixture_initial','--limit','3','--offset','3']).stdout);
+  assert.equal(next.items[0].entry.id, 'clm_fixture_old'); assert.equal(next.items[0].state, 'withdrawn');
+  assert.equal(run(['export']).stdout, before);
+  assert.equal(JSON.parse(run(['show','clm_fixture_user']).stdout).entry.data.attributed_to, 'fixture-user');
+  assert.equal(JSON.parse(run(['doctor']).stdout).ok, true);
+});
+test('CLI rejects ambiguous capture selectors before opening a DB', t => {
+  const { db, run } = setup(t);
+  for (const args of [ ['show'], ['show','clm_demo','--request-id','req_x'],
+    ['show','--request-id','req_x','--state','accepted'], ['show','--request-id','req_x','--dry-run'] ]) {
+    assert.equal(run(args).status, 2);
+    assert.equal(existsSync(db), false);
+  }
+  assert.equal(run(['show','--request-id','req_missing']).status, 3);
+  assert.equal(existsSync(db), false);
+  run(['init']);
+  assert.equal(run(['show','--request-id','req_missing']).status, 3);
+  assert.equal(run(['show','--request-id','']).status, 2);
+  assert.equal(run(['show','--request-id','req_missing','--limit','101']).status, 2);
+});

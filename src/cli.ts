@@ -14,6 +14,7 @@ const help = `yurai — a local ledger of claims and their grounds
   yurai review ID --state accepted|rejected|withdrawn|proposed --reason TEXT
   yurai search QUERY [--kind claim|source] [--include-inactive]
   yurai show ID [--limit 20] [--offset 0]
+  yurai show --request-id ID [--limit 20] [--offset 0]
   yurai export                         # snapshot JSON to stdout
   yurai import --file snapshot.json    # empty initialized ledger only
   yurai doctor
@@ -57,13 +58,13 @@ try {
   const [command, arg] = args;
   if (v.help || !command) { process.stdout.write(help); }
   else {
-    const positionalCounts: Record<string, number> = { init: 1, capture: 1, add: 1, review: 2, search: 2, show: 2, export: 1, import: 1, doctor: 1, schema: arg ? 2 : 1 };
+    const positionalCounts: Record<string, number> = { init: 1, capture: 1, add: 1, review: 2, search: 2, show: v['request-id'] !== undefined ? 1 : 2, export: 1, import: 1, doctor: 1, schema: arg ? 2 : 1 };
     if (!Object.hasOwn(positionalCounts, command) || args.length !== positionalCounts[command]) usage('unknown command or wrong arguments; use --help');
     // Reject misplaced flags instead of accepting options which have no effect.
     const allowed: Record<string, string[]> = {
       init: [], capture: ['file','dry-run'], add: ['file','actor','actor-kind','request-id','dry-run'],
       review: ['state','reason','actor','actor-kind','request-id','dry-run'],
-      search: ['kind','limit','offset','include-inactive'], show: ['limit','offset'],
+      search: ['kind','limit','offset','include-inactive'], show: ['limit','offset','request-id'],
       export: [], import: ['file'], doctor: [], schema: [] };
     for (const key of Object.keys(v)) if (!['db','help'].includes(key) && !allowed[command]!.includes(key)) usage(`--${key} is not valid for ${command}`);
     let result: unknown;
@@ -89,7 +90,10 @@ try {
         case 'search':
           if (v.kind && v.kind !== 'claim' && v.kind !== 'source') usage('--kind must be claim or source');
           result = ledger.search(arg!, { kind: v.kind === 'source' ? 'source' : 'claim', limit: Number(v.limit ?? 20), offset: Number(v.offset ?? 0), includeInactive: v['include-inactive'] ?? false }); break;
-        case 'show': result = ledger.show(arg!, Number(v.limit ?? 20), Number(v.offset ?? 0)); break;
+        case 'show':
+          result = v['request-id'] !== undefined
+            ? ledger.inspectCapture(v['request-id'], Number(v.limit ?? 20), Number(v.offset ?? 0))
+            : ledger.show(arg!, Number(v.limit ?? 20), Number(v.offset ?? 0)); break;
         case 'export': result = ledger.exportSnapshot(); break;
         case 'import': result = ledger.importSnapshot(readJson(v.file, 16 * 1024 * 1024)); break;
         case 'doctor': result = store.doctor(); if (!(result as { ok: boolean }).ok) process.exitCode = 1; break;

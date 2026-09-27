@@ -165,3 +165,81 @@ test('reopen, application identity, future schema refusal and immutable storage'
   const other = join(dir, 'other.sqlite'); const unknown = new DatabaseSync(other); unknown.exec('CREATE TABLE app (id INTEGER)'); unknown.close();
   assert.throws(() => new SqliteStore(other, true), code('SCHEMA'));
 });
+
+const dogfood = name => JSON.parse(readFileSync(new URL(`../examples/dogfood/${name}`, import.meta.url), 'utf8'));
+test('inspectCapture pages original membership, expands grounds, and never mutates records', t => {
+  const { ledger, store } = setup(t);
+  ledger.capture(example);
+  const before = ledger.exportSnapshot();
+  // Inspect a known receipt without scanning/exporting the whole ledger.
+  const entries = store.entries.bind(store);
+  store.entries = () => { throw new Error('unexpected full-ledger scan'); };
+  const first = ledger.inspectCapture(example.request_id, 2);
+  assert.equal(first.total, 6); assert.equal(first.next_offset, 2);
+  assert.equal(first.states_as_of, 'inspection'); assert.equal(first.truth_evaluated, false);
+  const collected = [...first.items];
+  for (let offset = first.next_offset; offset !== null;) {
+    const page = ledger.inspectCapture(example.request_id, 2, offset);
+    collected.push(...page.items); offset = page.next_offset;
+  }
+  assert.deepEqual(collected.map(v => v.entry.id), example.entries.map(e => e.id));
+  const assessment = collected.find(v => v.entry.type === 'assessment');
+  assert.equal(assessment.sources[0].entry.id, 'src_demo');
+  assert.ok(assessment.references.find(v => v.entry.type === 'evidence').warnings.includes('anchor_not_verified'));
+  assert.deepEqual(ledger.inspectCapture(example.request_id, 2, 100).items, []);
+  store.entries = entries;
+  assert.deepEqual(ledger.exportSnapshot(), before);
+});
+test('capture inspection survives restore and presents current reviews without rewriting events', t => {
+  const { ledger } = setup(t), other = setup(t);
+  const first = dogfood('01-capture.json'), correction = dogfood('02-correct.json');
+  ledger.capture(first); ledger.capture(correction);
+  const old = ledger.inspectCapture(first.request_id).items.find(v => v.entry.id === 'clm_fixture_old');
+  assert.equal(old.state, 'withdrawn');
+  assert.equal(old.entry.data.text, first.entries.find(e => e.id === old.entry.id).data.text);
+  assert.equal(old.review.data.rationale, 'The universal wording exceeded the attached evidence.');
+  const corrected = ledger.inspectCapture(correction.request_id);
+  const edge = corrected.items.find(v => v.entry.id === 'rel_fixture_supersedes');
+  assert.equal(edge.references.find(v => v.entry.id === 'clm_fixture_old').state, 'withdrawn');
+  // A review event remains the original event even after its target is reviewed again.
+  ledger.capture(bundle([{ id: 'rev_fixture_later', type: 'review', data: {
+    target_id: 'clm_fixture_old', state: 'rejected', rationale: 'later decision' } }], 'req_fixture_later'));
+  const event = ledger.inspectCapture(correction.request_id).items.find(v => v.entry.type === 'review');
+  assert.equal(event.entry.data.state, 'withdrawn'); assert.equal(event.references[0].state, 'rejected');
+  other.ledger.importSnapshot(ledger.exportSnapshot());
+  assert.deepEqual(other.ledger.inspectCapture(correction.request_id), ledger.inspectCapture(correction.request_id));
+  assert.equal(other.ledger.capture(correction).replayed, true);
+});
+test('capture inspection validates selection and never exposes a dry-run as saved', t => {
+  const { ledger } = setup(t); ledger.capture(example, true);
+  assert.throws(() => ledger.inspectCapture(example.request_id), code('NOT_FOUND'));
+  for (const id of ['', 'x', 'bad id', 'a'.repeat(129), 42])
+    assert.throws(() => ledger.inspectCapture(id), code('VALIDATION'));
+  assert.throws(() => ledger.inspectCapture('req_missing', 0), code('VALIDATION'));
+  assert.throws(() => ledger.inspectCapture('req_missing', 101), code('VALIDATION'));
+  assert.throws(() => ledger.inspectCapture('req_missing', 20, -1), code('VALIDATION'));
+});
+test('synthetic dogfood preserves attribution, disagreement, correction and current literal-search limit', t => {
+  const { ledger } = setup(t);
+  ledger.capture(dogfood('01-capture.json')); ledger.capture(dogfood('02-correct.json'));
+  const user = ledger.show('clm_fixture_user');
+  assert.equal(user.entry.actor.id, 'fixture-agent');
+  assert.equal(user.entry.data.attributed_to, 'fixture-user');
+  assert.equal(user.entry.data.kind, 'hypothesis');
+  assert.match(user.entry.data.text, /かもしれない/);
+  assert.match(user.entry.data.scope, /Tentative/); assert.ok(user.entry.data.why);
+  const old = ledger.show('clm_fixture_old');
+  assert.deepEqual(new Set(old.connections.filter(v => v.entry.type === 'assessment').map(v => v.entry.data.stance)), new Set(['supports', 'challenges']));
+  assert.equal(ledger.search('架空').items.some(v => v.entry.id === old.entry.id), false);
+  assert.equal(ledger.search('架空', { includeInactive: true }).items.some(v => v.entry.id === old.entry.id), true);
+  assert.ok(old.connections.some(v => v.entry.type === 'relation' && v.entry.data.relation === 'supersedes'));
+  // Characterizes the current gap, not the desired behavior. Replace this assertion in Issue #4.
+  assert.equal(ledger.search('ZKQ').items.length, 0);
+  assert.match(ledger.show('evd_fixture_x').entry.data.quote, /ZKQ/);
+  ledger.capture(bundle([{ id: 'rev_fixture_keep', type: 'review', data: {
+    target_id: 'clm_fixture_corrected', state: 'accepted', rationale: 'retain this representation only' } }], 'req_fixture_keep'));
+  const inspected = ledger.inspectCapture('req_fixture_correction');
+  assert.equal(inspected.items.find(v => v.entry.id === 'clm_fixture_corrected').state, 'accepted');
+  const anchor = inspected.items.find(v => v.entry.id === 'asm_fixture_corrected_x').references.find(v => v.entry.type === 'evidence');
+  assert.equal(anchor.state, 'proposed'); assert.ok(anchor.warnings.includes('anchor_not_verified'));
+});

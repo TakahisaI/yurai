@@ -1,0 +1,112 @@
+{
+  "version": 1,
+  "request_id": "req_fixture_initial",
+  "actor": {
+    "kind": "agent",
+    "id": "fixture-agent"
+  },
+  "entries": [
+    {
+      "id": "src_fixture",
+      "type": "source",
+      "data": {
+        "title": "Fictional comparison, not a research finding",
+        "medium": "experiment",
+        "uri": "urn:yurai:synthetic:dogfood:v1",
+        "version": "v1",
+        "note": "Entirely invented fixture. No retrievable external source is asserted."
+      }
+    },
+    {
+      "id": "evd_fixture_x",
+      "type": "evidence",
+      "data": {
+        "source_id": "src_fixture",
+        "quote": "ZKQ: 条件Xでは A=80, B=70。架空の値。",
+        "locator": "Fictional table, row X"
+      }
+    },
+    {
+      "id": "evd_fixture_y",
+      "type": "evidence",
+      "data": {
+        "source_id": "src_fixture",
+        "quote": "条件Yでは A=70, B=70。架空の値。",
+        "locator": "Fictional table, row Y"
+      }
+    },
+    {
+      "id": "clm_fixture_old",
+      "type": "claim",
+      "data": {
+        "text": "架空の手法Aはどの条件でも手法Bより優れている。",
+        "kind": "inference",
+        "attributed_to": "fixture-agent",
+        "scope": "Deliberately overgeneralized fixture to exercise correction.",
+        "why": "Keep the comparison and inspect its limits before reuse."
+      }
+    },
+    {
+      "id": "asm_fixture_support",
+      "type": "assessment",
+      "data": {
+        "claim_id": "clm_fixture_old",
+        "evidence_id": "evd_fixture_x",
+        "stance": "supports",
+        "rationale": "Row X favors A, but supports only that condition, not the universal claim."
+      }
+    },
+    {
+      "id": "asm_fixture_challenge",
+      "type": "assessment",
+      "data": {
+        "claim_id": "clm_fixture_old",
+        "evidence_id": "evd_fixture_y",
+        "stance": "challenges",
+        "rationale": "The tie in row Y challenges the universal wording."
+      }
+    },
+    {
+      "id": "clm_fixture_user",
+      "type": "claim",
+      "data": {
+        "text": "架空の手法Aの改善は条件に依存するかもしれない。",
+        "kind": "hypothesis",
+        "attributed_to": "fixture-user",
+        "scope": "Tentative; only this fictional comparison.",
+        "why": "Retain the fictional user's alternative explanation, not an established result."
+      }
+    },
+    {
+      "id": "clm_fixture_agent",
+      "type": "claim",
+      "data": {
+        "text": "架空の比較表だけでは改善の原因を説明できない。",
+        "kind": "inference",
+        "attributed_to": "fixture-agent",
+        "scope": "This fictional table reports outcomes, not a causal intervention.",
+        "why": "Keep the agent's added reasoning distinct from the user's hypothesis."
+      }
+    },
+    {
+      "id": "asm_fixture_context",
+      "type": "assessment",
+      "data": {
+        "claim_id": "clm_fixture_user",
+        "evidence_id": "evd_fixture_x",
+        "stance": "context",
+        "rationale": "A reported outcome motivates the hypothesis but does not establish the mechanism."
+      }
+    },
+    {
+      "id": "rel_fixture_qualifies",
+      "type": "relation",
+      "data": {
+        "from_claim_id": "clm_fixture_agent",
+        "to_claim_id": "clm_fixture_user",
+        "relation": "qualifies",
+        "rationale": "Distinguish a possible explanation from a demonstrated cause."
+      }
+    }
+  ]
+}
