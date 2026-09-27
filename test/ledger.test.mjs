@@ -625,7 +625,7 @@ test('current-schema fixture matches fresh initialization', t => {
   const fixture = readFileSync(new URL('./fixtures/v2-schema.sql', import.meta.url), 'utf8');
   const norm = s => s.replace(/\s+/g, ' ').trim();
   const body = fixture.split('\n').filter(l => !l.trim().startsWith('--')).join('\n');
-  const wanted = body.split(/;\n/).map(norm).filter(s => s && !s.startsWith('PRAGMA')).sort();
+  const wanted = body.split(/;\r?\n/).map(norm).filter(s => s && !s.startsWith('PRAGMA')).sort();
   assert.equal(wanted.length, 12);
   assert.deepEqual(live, wanted);
   assert.equal(db.prepare('PRAGMA user_version').get().user_version, Number(fixture.match(/PRAGMA user_version = (\S+);/)[1]));
