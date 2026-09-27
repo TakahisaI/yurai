@@ -14,15 +14,16 @@ This skill contains usage mechanics, not prior findings or a research plan.
 - The host agent owns answering, research, verification, and its time budget.
   Use the ledger when relevant; neither ledger-first nor capture-every-turn is
   mandatory. Do not replace answering or checking a claim with "shall I save it?".
-- Capture relevant reusable findings without repeated permission ONLY within a
-  user-authorized persistence scope and designated private ledger. Invoking a
-  configured skill can provide that scope; its mere discovery cannot. Respect
-  read-only/no-save requests. Ask once for a missing target or material boundary;
-  do not invent a DB path or identity. `proposed` is already persisted, not consent,
-  a reversible draft, a truth guarantee, or a promise of future human review.
-- Pass the designated `--db` explicitly. Initialize it only when needed and
-  authorized. Keep ledgers, bundles, exports, and real conversations outside the
-  repository. Do not publish them. A missing DB is not an empty search result.
+- Persistence target: use the default chain without asking — an explicitly
+  given `--db`, else `$YURAI_DB`, else `~/.yurai/ledger.sqlite` — and state
+  which ledger you are using. Initialize it when missing. Ask only to narrow
+  scope (a separate scratch ledger) or when the task is read-only/no-save,
+  in which case save nothing. Never invent non-default paths. `proposed` is
+  already persisted, not consent, a reversible draft, a truth guarantee, or
+  a promise of future human review.
+- Pass the resolved `--db` explicitly on every call. Keep ledgers, bundles,
+  exports, and real conversations outside the repository. Do not publish
+  them. A missing DB is not an empty search result.
 
 ## Recall and record
 
