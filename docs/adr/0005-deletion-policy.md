@@ -1,6 +1,6 @@
 # ADR 0005 — Deletion and redaction policy for an append-only ledger
 
-Status: Accepted / 2026-09-27
+Status: Proposed / 2026-09-27
 
 yurai is append-only by default: records are immutable, UPDATE/DELETE are
 refused by triggers, and export/import stay total. That default exists to
@@ -10,6 +10,13 @@ vocabulary, guarantees, and design rules. It specifies no implementation:
 no CLI surface, flags, or destructive export/import variants live here.
 
 ## Decision
+
+Ordinary correction is not deletion: a factual mistake stays append-only —
+a new record plus `supersedes`, with a withdrawn Review on the old state
+when appropriate — and the old record stays readable. Purge and redact
+are reserved for sensitive data (secrets, private information) or
+wrong-scope ingestion (another person's data, wrong database), never for
+rewriting history to flatter it.
 
 Two operations, distinct by what survives:
 
@@ -35,8 +42,15 @@ Guarantees, by kind:
 
 Design rules, normative for the future implementation issue:
 
-1. Copy-first: operate on a copy; the original file is untouched until
-   the replacement verifies.
+1. Offline, exclusive copy-first: deletion runs with no other handles
+   on the ledger and refuses when the file is locked. Snapshot the
+   source consistently — checkpoint and close first, or use the SQLite
+   online backup API / `VACUUM INTO` — so WAL-committed pages are
+   included; never copy the bare main file while `-wal`/`-shm` hold
+   committed data. The original file is untouched until the replacement
+   verifies; replacement swaps in the new file only after every handle
+   closes, and stale sidecars go away with the old file instead of
+   being carried over.
 2. Export-before-delete: the operator first exports the doomed scope, and
    the flow takes that export artifact as input — proof of deliberation
    and a recovery path. Accidental deletion must never be reframable as
@@ -45,8 +59,11 @@ Design rules, normative for the future implementation issue:
 3. Atomic replacement: rebuild into a NEW file, regenerating lookup rows
    from the resulting bodies and preserving survivors' `seq` order (the
    v1→v2 precedent); gate replacement on `doctor` plus a re-export
-   comparison against the computed expectation (pre-delete export minus
-   the doomed scope).
+   comparison against a computed expectation — for purge, the pre-delete
+   export minus the doomed scope (entries, their links and lookup rows,
+   and affected receipts gone; everything else byte-identical); for
+   redaction, the same entry IDs with tombstoned bodies, preserved
+   links, regenerated lookup, and dropped affected receipts.
 4. Refuse dangling dependents: purge refuses when surviving records
    reference the doomed scope unless the scope expands to include them;
    the cascade is computed, shown, and confirmed.
@@ -60,14 +77,26 @@ Design rules, normative for the future implementation issue:
    the resurrection bundle. The implementation issue must close this;
    the recommended direction is a tombstone registry of purged
    `request_id` digests (opaque: no IDs or content), consulted on
-   capture and verify.
+   capture and verify. Scope: it refuses re-submission under a purged
+   `request_id` only — re-creation of the same content under a NEW
+   `request_id` (new IDs, new receipt) is a new recording act,
+   indistinguishable without remembering content, and is not stopped.
+   Privacy assumption: digests are opaque under SHA-256 preimage
+   resistance, so the registry leaks only a purge count; anyone who can
+   guess a `request_id` can test its membership, so IDs stay
+   operator-held, like the pre-delete export itself.
 6. Audit without resurrection: no in-ledger audit record carries purged
    IDs or content — that would defeat the purge. The pre-delete export
    is the audit artifact, held by the operator. A redaction tombstone
-   replaces the body with a marker carrying reason and timestamp only;
-   id, type, actor, created_at, and links survive as the Decision
-   states. Tombstone bodies need a schema-valid representation for
-   typed import validation; deferred to the implementation issue.
+   replaces the body with a marker carrying reason, timestamp, and the
+   reference targets the type needs to preserve links (`source_id`,
+   `claim_id`, `evidence_id`, `from_claim_id`/`to_claim_id`,
+   `target_id`, `target_evidence_id`/`target_source_id` as applicable);
+   all other content fields are removed. Snapshot v1 needs no format
+   change: restore regenerates links from the retained references. When
+   a reference ID itself is sensitive, redact is the wrong tool — purge
+   the scope instead. Tombstone bodies need a schema-valid representation
+   for typed import validation; deferred to the implementation issue.
 7. Backups: the procedure requires enumerating known backup and export
    copies and destroying or re-cutting them. The tool cannot reach
    copies it never held; that limit is stated, not solved.
