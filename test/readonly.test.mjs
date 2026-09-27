@@ -80,6 +80,17 @@ test('readonly open refuses migration and leaves v1 bytes intact', t => {
   assert.equal(writable.schemaVersion(), 2);
 });
 
+test('readonly open refuses future schemas without a migration hint', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'yurai-ro-'));
+  const path = join(dir, 'future.sqlite');
+  const raw = new DatabaseSync(path);
+  raw.exec('PRAGMA application_id = 0x59555249; PRAGMA user_version = 99;');
+  raw.close();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  assert.throws(() => new SqliteStore(path, false, { readonly: true }), e =>
+    e instanceof LedgerError && e.code === 'SCHEMA' && /Unsupported/.test(e.message) && !/needs migration/.test(e.message));
+});
+
 test('readonly open rejects missing, foreign, and contradictory targets', t => {
   const dir = mkdtempSync(join(tmpdir(), 'yurai-ro-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));

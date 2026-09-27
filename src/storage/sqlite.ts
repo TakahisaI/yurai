@@ -100,6 +100,7 @@ export class SqliteStore implements Store {
         this.transaction(() => { this.db.exec(migration); });
       } else if (app !== APPLICATION_ID) fail('SCHEMA', 'Unsupported ledger identity or schema version');
       else if (version !== CURRENT_SCHEMA) {
+        if (version < 1 || version > CURRENT_SCHEMA) fail('SCHEMA', 'Unsupported ledger identity or schema version');
         if (this.readOnly) fail('SCHEMA', `schema v${version} needs migration; reopen without --readonly to migrate`);
         this.applyMigrations(version);
       }
@@ -129,10 +130,10 @@ export class SqliteStore implements Store {
   }
   close(): void { this.db.close(); }
   transaction<T>(fn: () => T): T {
-    // Reads share this wrapper, so readonly runs the body without BEGIN:
-    // every mutator below refuses first, and SQLite readOnly is the backstop.
-    if (this.readOnly) return fn();
-    this.db.exec('BEGIN IMMEDIATE');
+    // Readonly keeps a deferred read snapshot so multi-query reads (export,
+    // expanded search) stay consistent; mutators refuse first, and SQLite
+    // readOnly is the backstop against any write slipping through.
+    this.db.exec(this.readOnly ? 'BEGIN' : 'BEGIN IMMEDIATE');
     try { const result = fn(); this.db.exec('COMMIT'); return result; }
     catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }

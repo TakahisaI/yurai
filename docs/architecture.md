@@ -69,7 +69,8 @@ When a relation target is unaccepted or withdrawn, include that state in the res
 The v1 migration is the initial schema only. v2 admits the `verification` record
 type by rebuilding the `records` table (SQLite cannot drop a CHECK), preserving
 `seq` so insertion order survives. Known v1 ledgers migrate automatically on
-open. Migrations run as a numbered chain from the stored version to current;
+writable open; a `--readonly` open refuses and names a writable reopen instead.
+Migrations run as a numbered chain from the stored version to current;
 the registry owns each step's transaction and commits its DDL, integrity
 checks, and version update as one atomic unit, so any failure rolls everything
 back for a retry. Foreign keys stay off around the chain (DROP TABLE under

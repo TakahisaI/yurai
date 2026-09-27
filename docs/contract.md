@@ -120,8 +120,9 @@ the file is unreadable, as do non-UTF-8 bytes and oversize input. Direct
 capture of a verification against quoteless Evidence fails the same way.
 Verification history rides the normal
 export/restore path losslessly. Schema v2 admits the record type; v1 ledgers
-migrate forward automatically on first open by any command, reads included
-(see architecture).
+migrate forward automatically on first writable open (see architecture).
+A `--readonly` open of a migration-needing ledger fails and names a writable
+reopen instead of migrating.
 
 ## Inspecting one capture
 
