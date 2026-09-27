@@ -60,14 +60,19 @@ test('same request_id and bundle from multiple processes replays without duplica
 test('same request_id with different content concurrently conflicts exactly once per loser', async t => {
   const { dir, runAsync } = setup(t);
   assert.equal((await runAsync(['init'])).status, 0);
-  const a = bundleFile(dir, 'a.json', 'req_cc_duel', [claim('clm_cc_duel', 'duel version A')]);
-  const b = bundleFile(dir, 'b.json', 'req_cc_duel', [claim('clm_cc_duel', 'duel version B')]);
+  const a = bundleFile(dir, 'a.json', 'req_cc_duel', [claim('clm_cc_duel_a', 'duel version A')]);
+  const b = bundleFile(dir, 'b.json', 'req_cc_duel', [claim('clm_cc_duel_b', 'duel version B')]);
   const results = await Promise.all([runAsync(['capture', '--file', a]), runAsync(['capture', '--file', b])]);
   assert.deepStrictEqual(results.map(r => r.status).sort(), [0, 4]);
-  assert.match(results.find(r => r.status === 4).stderr, /CONFLICT/);
+  const loserError = JSON.parse(results.find(r => r.status === 4).stderr).error;
+  assert.equal(loserError.code, 'CONFLICT');
+  assert.match(loserError.message, /request_id was already used with different content/);
   const snapshot = JSON.parse((await runAsync(['export'])).stdout);
   assert.equal(snapshot.receipts.filter(r => r.request_id === 'req_cc_duel').length, 1);
-  assert.match(JSON.parse((await runAsync(['show', 'clm_cc_duel'])).stdout).entry.data.text, /^duel version [AB]$/);
+  const duelIds = snapshot.entries.map(e => e.id).filter(id => id.startsWith('clm_cc_duel_'));
+  assert.deepStrictEqual(duelIds.length, 1);
+  const shown = JSON.parse((await runAsync(['show', duelIds[0]])).stdout);
+  assert.equal(shown.entry.data.text, `duel version ${duelIds[0].endsWith('_a') ? 'A' : 'B'}`);
 });
 test('writer exceeding busy timeout fails without partial writes', async t => {
   const { dir, db, runAsync } = setup(t);
@@ -83,9 +88,13 @@ test('writer exceeding busy timeout fails without partial writes', async t => {
     holder.exec('ROLLBACK');
     holder.close();
   }
+  const elapsed = Date.now() - started;
   assert.equal(writer.status, 1, writer.stderr);
-  assert.match(writer.stderr, /locked|busy/i);
-  assert.ok(Date.now() - started >= 4000, 'writer must retry through the busy timeout, not fail instantly');
+  const busyError = JSON.parse(writer.stderr).error;
+  assert.equal(busyError.code, 'IO_OR_RUNTIME');
+  assert.match(busyError.message, /locked|busy/i);
+  assert.ok(elapsed >= 4000, 'writer must retry through the busy timeout, not fail instantly');
+  assert.ok(elapsed < 30000, 'writer must fail near the 5s busy timeout, not hang');
   assert.equal(JSON.parse((await runAsync(['doctor'])).stdout).ok, true);
   const snapshot = JSON.parse((await runAsync(['export'])).stdout);
   assert.equal(snapshot.entries.filter(e => e.id === 'clm_cc_blocked').length, 0);
