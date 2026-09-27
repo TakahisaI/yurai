@@ -59,7 +59,7 @@ function buildLedger({ claims, evdPerClaim, asmPerEvd, reviewsPerClaim, verifica
         counts.assessment++;
       }
       if (rand() < verificationsFraction) {
-        const searched = Buffer.from(`prefix ${quote} suffix`, 'utf8');
+        const searched = Buffer.from('synthetic bytes without the passage', 'utf8');
         entries.push({ id: `${evd}_v`, type: 'verification', data: { target_evidence_id: evd, target_source_id: src,
           outcome: 'mismatch', method: 'verbatim', verified_at: AT,
           searched_sha256: createHash('sha256').update(searched).digest('hex'), searched_bytes: searched.length } });
