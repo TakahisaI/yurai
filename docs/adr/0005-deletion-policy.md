@@ -1,6 +1,6 @@
 # ADR 0005 — Deletion and redaction policy for an append-only ledger
 
-Status: Proposed / 2026-09-27
+Status: Accepted / 2026-09-27
 
 yurai is append-only by default: records are immutable, UPDATE/DELETE are
 refused by triggers, and export/import stay total. That default exists to
