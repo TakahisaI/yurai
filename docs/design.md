@@ -63,8 +63,8 @@ One Source plus a quote or locator. Figures, tables, or dataset rows need no pro
 Hold verbatim text in quote and summaries in paraphrase, separately. prefix/suffix around the quoted passage can be stored.
 A locator may start as any string a human can use to rediscover the passage; typed selectors come later.
 
-v0 does not match quotations against sources. Evidence always returns as `anchor_not_verified`.
-Since schema v2, `verify` records quotation checks; see contract §"Verifying a quotation" and ADR 0004.
+Evidence with no verification event returns as `anchor_not_verified`.
+Since schema v2, `verify` records quotation checks against caller-supplied local bytes, and warnings read `anchor_match`, `anchor_mismatch`, `anchor_multiple`, or `anchor_unreachable`; see contract §"Verifying a quotation" and ADR 0004.
 An "accepted Evidence" is not the same as an "Evidence matched against its source."
 
 ### Assessment — how that passage is interpreted
