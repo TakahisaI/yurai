@@ -4,12 +4,14 @@ import { readFileSync } from 'node:fs';
 import { Ledger, SqliteStore } from '../dist/index.js';
 
 const ledger = JSON.parse(readFileSync(new URL('../examples/eval/ledger.json', import.meta.url), 'utf8'));
+const ledgerWdDeps = JSON.parse(readFileSync(new URL('../examples/eval/ledger-wd-deps.json', import.meta.url), 'utf8'));
 const queries = JSON.parse(readFileSync(new URL('../examples/eval/queries.json', import.meta.url), 'utf8'));
 
 function setup() {
   const store = new SqliteStore(':memory:', true);
   const ledgerApi = new Ledger(store);
   ledgerApi.capture(ledger);
+  ledgerApi.capture(ledgerWdDeps);
   return { store, ledgerApi };
 }
 
@@ -128,7 +130,10 @@ test('retrieval eval: withdrawn evidence path keeps full states on the audit pat
   const item = result.items.find(i => i.entry.id === 'clm_eval_drop');
   assert.ok(item);
   assert.ok(item.via.length > 0);
+  assert.equal(item.state, 'proposed');
   assert.equal(item.via[0].evidence.state, 'withdrawn');
+  assert.equal(item.via[0].assessment.state, 'proposed');
+  assert.equal(item.via[0].source.state, 'proposed');
 });
 
 test('retrieval eval: withdrawn assessment path keeps full states on the audit path', t => {
@@ -138,8 +143,10 @@ test('retrieval eval: withdrawn assessment path keeps full states on the audit p
   const item = result.items.find(i => i.entry.id === 'clm_eval_drop');
   assert.ok(item);
   assert.ok(item.via.length > 0);
-  assert.equal(item.via[0].assessment.state, 'withdrawn');
+  assert.equal(item.state, 'proposed');
   assert.equal(item.via[0].evidence.state, 'proposed');
+  assert.equal(item.via[0].assessment.state, 'withdrawn');
+  assert.equal(item.via[0].source.state, 'proposed');
 });
 
 test('retrieval eval: withdrawn source path keeps full states on the audit path', t => {
@@ -149,6 +156,8 @@ test('retrieval eval: withdrawn source path keeps full states on the audit path'
   const item = result.items.find(i => i.entry.id === 'clm_eval_drop');
   assert.ok(item);
   assert.ok(item.via.length > 0);
-  assert.equal(item.via[0].source.state, 'withdrawn');
+  assert.equal(item.state, 'proposed');
   assert.equal(item.via[0].evidence.state, 'proposed');
+  assert.equal(item.via[0].assessment.state, 'proposed');
+  assert.equal(item.via[0].source.state, 'withdrawn');
 });
