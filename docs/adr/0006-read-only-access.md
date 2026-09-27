@@ -1,6 +1,6 @@
 # ADR 0006 — Read-only ledger access as a storage-opening mode
 
-Status: Proposed / 2026-09-27
+Status: Accepted / 2026-09-27
 
 ## Decision
 
