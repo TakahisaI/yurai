@@ -1,81 +1,81 @@
 # Architecture
 
-## 境界
+## Boundaries
 
 ```text
-src/cli.ts                  引数・ファイル・stdin/stdout
+src/cli.ts                  arguments, files, stdin/stdout
       │
 src/core/ledger.ts           capture / search / show / export / restore
-      │                     来歴・参照型・不変条件・レビュー状態
-src/core/ports.ts            小さなStore interface
+      │                     provenance, reference types, invariants, review states
+src/core/ports.ts            a small Store interface
       │
-src/storage/sqlite.ts       SQL・transaction・永続化・検索index
+src/storage/sqlite.ts       SQL, transactions, persistence, search index
 
-src/core/model.ts            型・入力schema・局所検証
+src/core/model.ts            types, input schema, local validation
 ```
 
-CoreはCLI、MCP、ファイル取得、モデルAPI、SQLiteに依存しない。
-Node標準の暗号学的hashとURL解析は使う。モデル非依存とランタイム非依存は同義ではない。
-新しい入口は同じLedgerへ委譲する。adapterからStoreへ直接書くのは禁止する。
+Core depends on neither CLI, MCP, file retrieval, model APIs, nor SQLite.
+It uses Node's standard cryptographic hash and URL parsing. Model independence is not the same as runtime independence.
+New entry points delegate to the same Ledger. Writing to the Store directly from an adapter is forbidden.
 
-## なぜこのサイズか
+## Why this size
 
-1つのTypeScript package、1つのSQLite DB。monorepo、ORM、dependency injection framework、graph database、Web serverは置かない。
-CLI/MCPが共有するのはuse caseとデータ契約であり、プロトコル固有の便利機能ではない。
-実行時の外部依存はゼロ。Nodeの`node:sqlite`はstorage adapter一箇所に隔離する。
-Node 22.16を互換性の最低線、24系を通常開発環境とし、両方をCIで検証する。
+One TypeScript package, one SQLite DB. No monorepo, ORM, dependency injection framework, graph database, or web server.
+CLI and MCP share use cases and the data contract, not protocol-specific conveniences.
+Zero runtime dependencies. Node's `node:sqlite` stays isolated in one storage adapter.
+Node 22.16 is the compatibility floor and 24.x the normal development environment; CI checks both.
 
-## 物理モデル
+## Physical model
 
-- `records`: 5つの内容型とReview。JSONのdata/actorに型検証を適用し、ID・型・順序・時刻は列で保持する。
-- `links`: 検索可能な有向参照。FKと型チェックを併用する。FKは同じcapture内の前方参照を許す。
-- `receipts`: request_id、正規化入力のSHA-256、作成ID列。再試行の二重書き込みを防ぐ。
-- `lookup`: Claim/Sourceから再生成できるFTS5 trigram検索index。
+- `records`: the five content types plus Review. Typed validation applies to JSON data/actor; ID, type, order, and time stay in columns.
+- `links`: searchable directed references. FKs and type checks combine. FKs allow forward references within one capture.
+- `receipts`: request_id, SHA-256 of normalized input, created ID list. Prevents double writes on retry.
+- `lookup`: FTS5 trigram search index regenerable from Claims/Sources.
 
-これは任意の型やエッジを追加できる汎用グラフエンジンではない。固定の判別共用体とStore APIが公開契約になる。
-JSONカラムにした理由は、自然言語の補助情報を持つ少数の型を、小さなadapterで無損失に出し入れするため。
-参照と状態の問い合わせはindex化し、具体的に必要になったフィールドだけ列・indexに昇格する。
+This is not a general graph engine for adding arbitrary types or edges. The fixed discriminated union and Store API are the public contract.
+JSON columns exist so a small adapter can round-trip a few types with natural-language metadata losslessly.
+Reference and state queries are indexed; only concretely needed fields graduate to columns and indexes.
 
-## 保存の不変条件
+## Storage invariants
 
-1. actorとcreated_atは全レコードに残す。actorは署名された身份ではない。
-2. IDは不変。既存のIDを上書きしない。似た文章を自動統合しない。
-3. EvidenceはSourceを、AssessmentはClaimとEvidenceを参照する。Relationの両端はClaim。
-4. Evidenceにはquoteかlocatorが必要。要約だけを証拠箇所として保存しない。
-5. ReviewはReviewを対象にしない。採用状態と真偽と引用照合を混ぜない。
-6. 全レコード・参照・index・receiptを一つのSQLite transactionでcommitする。
-7. 同じrequest_idと同じ入力は同じreceipt。内容が異なればCONFLICT。
-8. supersedesの循環は禁止。他の意味関係から機械的な推論はしない。
+1. actor and created_at stay on every record. An actor is not a signed identity.
+2. IDs are immutable. Never overwrite an existing ID. Never auto-merge similar texts.
+3. Evidence references a Source; Assessment references a Claim and an Evidence. Both Relation ends are Claims.
+4. Evidence needs a quote or locator. Never store a bare summary as an evidence location.
+5. Reviews never target Reviews. Never mix working state with truth and quote matching.
+6. All records, references, indexes, and receipts commit in one SQLite transaction.
+7. The same request_id with the same input yields the same receipt. Different content is a CONFLICT.
+8. supersedes cycles are forbidden. No mechanical inference from other semantic relations.
 
-UPDATE/DELETEを拒否するtriggerを置く。ただしDB所有者による改竄を防止する仕組みではない。
-暗号署名、hash chain、event sourcing platformは導入しない。
+Triggers reject UPDATE/DELETE. That is no defense against tampering by the DB owner.
+No cryptographic signatures, hash chains, or event-sourcing platform.
 
-## 検索と展開
+## Search and expansion
 
-保存原文は変更せず、検索用テキストだけNFKC＋小文字化する。
-入力は空白区切りのliteral AND検索であり、検索式・SQL・正規表現として実行しない。
-3文字以上の語はtrigram、1〜2文字の語は同じ正規化テキストの部分文字列検索にする。
-「出生率」「出生」「AI」のいずれも扱う。形態素解析や意味検索ではない。
+Stored originals never change; only the search text is NFKC-normalized and lowercased.
+Input is whitespace-separated literal AND search, never executed as search expressions, SQL, or regex.
+Terms of 3+ characters use trigrams; 1–2 character terms use substring search over the same normalized text.
+Handles "出生率", "出生", and "AI" alike. No morphological analysis or semantic search.
 
-検索の既定はClaim。rejected/withdrawnは既定検索から除くが、ID指定とinclude-inactiveでは残す。
-showは直接の接続と、必要なEvidence→Sourceまで展開する。無制限にgraphを辿らない。
-関係先が未採用・撤回済みなら、その状態も応答に含める。ページにない反証を「存在しない」と説明してはいけない。
+Search defaults to Claims. rejected/withdrawn stay out of default search but remain via ID lookup and include-inactive.
+show expands direct connections and the needed Evidence→Source hops. It never traverses the graph unboundedly.
+When a relation target is unaccepted or withdrawn, include that state in the response. Never describe missing-page counterevidence as "nonexistent."
 
-## 整合性・移行・バックアップ
+## Integrity, migration, backup
 
-`application_id`と`user_version`で自分のDBを確認する。未知のDB・将来版を黙って初期化しない。
-v1のmigrationは初期スキーマだけ。今後の変更では番号付きの前進migrationと旧版fixtureによるテストを追加する。
-WAL、foreign_keys、busy_timeout、synchronous=FULLを設定する。
+`application_id` and `user_version` identify our own DB. Never silently initialize an unknown or future-version DB.
+The v1 migration is the initial schema only. Later changes add numbered forward migrations with tests on old-version fixtures.
+WAL, foreign_keys, busy_timeout, and synchronous=FULL are set.
 
-exportは同一transactionから全レコードとreceiptを読み、Reviewの挿入順を維持する。
-restoreは空の台帳に対してのみ、スキーマと参照を確認して全体をcommitする。既存台帳とのmergeではない。
-原典のblobや外部URIの先はexport対象外。snapshotに記録されたactorやdigestの真正性は保証しない。
+export reads all records and receipts from one transaction, preserving Review insertion order.
+restore targets an empty ledger only, checking schema and references before committing everything. It is not a merge with an existing ledger.
+Source blobs and the far side of external URIs are out of export scope. Actors and digests recorded in a snapshot are not authenticated.
 
-## 初期実装の意図的な限界
+## Deliberate limits of the initial implementation
 
-captureのsupersedes検証とexport/restoreは小規模台帳向けに全体を読む。
-同期待ち・BEGIN IMMEDIATEによる直列化を使い、長時間サーバや大規模並列書き込みには最適化していない。
-検索順は新しい記録からで、関連度ランキングではない。完全なUnicode case foldingや形態素処理もしない。
-showのページにはReviewも含むため、全根拠を読むにはnext_offsetを辿る必要がある。
-quoteの真偽・locatorの妥当性・原典の独立性は未評価。
-大きな台帳、redaction、merge-import、引用照合、権限分離は後続Issueの対象であり、実装済みと表示しない。
+capture's supersedes check and export/restore read everything, sized for small ledgers.
+Synchronous waits with BEGIN IMMEDIATE serialize writes; not tuned for long-lived servers or heavy parallel writes.
+Search order is newest-first, not relevance ranking. No full Unicode case folding or morphological processing.
+show pages include Reviews, so reading all grounds requires following next_offset.
+Quote truth, locator validity, and source independence are unevaluated.
+Large ledgers, redaction, merge-import, quote matching, and privilege separation are later issues; never display them as implemented.

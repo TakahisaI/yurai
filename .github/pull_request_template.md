@@ -1,13 +1,13 @@
-## 目的と関連Issue
+## Purpose and linked issues
 
-## 変更内容
+## Changes
 
-## 検証
+## Verification
 
 - [ ] `npm run check`
-- [ ] 必要な回帰テストを追加
-- [ ] データ契約・設計書を更新、または不要な理由を記載
-- [ ] 帰属・scope・原典・採用状態を損なっていない
-- [ ] 実データ、秘密情報、台帳・snapshotを含まない
+- [ ] Added needed regression tests
+- [ ] Updated the data contract/design docs, or noted why not
+- [ ] Attribution, scope, sources, and adopted states intact
+- [ ] No real data, secrets, ledgers, or snapshots
 
-未検証の範囲:
+Unverified scope:

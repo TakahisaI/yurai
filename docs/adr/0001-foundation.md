@@ -1,42 +1,42 @@
-# ADR 0001 — 小さく始め、失われる区別だけ先に固定する
+# ADR 0001 — Start small; pin only the distinctions that would be lost
 
 Status: Accepted / 2026-09-27
 
-## 決定
+## Decision
 
-TypeScript + Node.js標準SQLite + CLIで、一つのpackageを作る。
-論理モデルはSource / Claim / Evidence / Assessment / Relation、運用履歴はReview。
-主要な保存境界はprimitiveの連打ではなく、原子的・冪等なcapture。
-記録は不変、状態は追記。検索とexport/restoreを最初の縦切りに含める。
+Build one package with TypeScript + Node.js standard SQLite + CLI.
+The logical model is Source / Claim / Evidence / Assessment / Relation; the operations history is Review.
+The primary storage boundary is atomic, idempotent capture, not repeated primitives.
+Records are immutable; states append. Include search and export/restore in the first vertical slice.
 
-## 理由
+## Reasons
 
-原典箇所を指すことと、その箇所が主張を支持すると判断することは異なる。
-この区別、主張の帰属、記録者、条件、原典の版は、後から推定して埋め直すと情報を捏造することになる。
-したがって最初から器を設ける。一方、完全なontologyや正規化・名寄せ・真偽スコアは利用要求が出るまで作らない。
+Pointing at a source passage differs from judging that the passage supports a claim.
+That distinction, claim attribution, recorder, conditions, and source edition would become fabricated information if estimated and backfilled later.
+So the containers exist from the start. Meanwhile, a full ontology, normalization, entity resolution, and truth scores wait until usage demands them.
 
-TypeScriptはCLIと将来のagent adapterの契約を共有しやすく、Node標準SQLiteは実行時のnative addonや外部サービスを不要にする。
-APIのランタイム差異をstorageに隔離し、22.16と24系をCI対象にする。
-同期実装は小さなローカル台帳では制御が単純で、保存の完了境界が明確になる。
+TypeScript shares contracts easily between the CLI and future agent adapters, and Node standard SQLite removes runtime native addons and external services.
+Runtime API differences stay isolated in storage; CI targets 22.16 and 24.x.
+A synchronous implementation keeps control simple and completion boundaries explicit for a small local ledger.
 
-## 比較して採らなかった案
+## Alternatives considered
 
-- 元の4エンティティのまま進む: 解釈と証拠箇所、誰の主張かが混ざる。
-- SourceRevision / Agent / Activityをすべて別エンティティにする: 初期運用の入力・実装負担が大きい。版付きSourceとactor valueで代替する。
-- 常に人間の承認を要求する: 会話の流れを阻害する。proposedとして保存し、必要な箇所を明示的にreviewする。
-- EvidenceがないClaimを禁止する: 仮説や独自の推論を失う。種別と帰属を明示して保存可能にする。
-- Neo4j / RDF / vector DB: この利用規模と問い合わせには不要。由来は専用製品がなくても保てる。
-- Python: SQLiteとCLIには十分適しているが、今回は将来のadapterと型付き契約を同じ言語で維持する方を選ぶ。
-- Rust: 単一バイナリ配布には魅力があるが、初期の契約・利用フロー探索を優先する。
-- MCPを先に完成させる: 運用が固まる前にprotocol/tool設計へ引きずられる。
+- Keep the original four entities: interpretation and evidence locations mix, and claim ownership blurs.
+- Separate entities for SourceRevision / Agent / Activity: too much input and implementation burden for early operation. Versioned Sources and actor values cover it.
+- Always require human approval: breaks conversation flow. Store as proposed and explicitly review what matters.
+- Forbid Claims without Evidence: loses hypotheses and original inferences. Allow them with explicit type and attribution.
+- Neo4j / RDF / vector DB: unnecessary for this usage scale and these queries. Provenance holds without dedicated products.
+- Python: adequate for SQLite and CLI, but this time keep typed contracts and future adapters in one language.
+- Rust: attractive for single-binary distribution, but contract and usage-flow exploration comes first.
+- Finish MCP first: protocol/tool design would drag before operations settle.
 
-## 支払うコスト
+## Costs
 
-AssessmentとReviewが増える。軽量な手書きschema validatorを持つ。公開JSON Schemaと同じ定義を使い、対応subsetを増やすときはテストを追加する。
-暗号学的改竄防止も認証もない。不変性は誤操作と履歴喪失を防ぐためであり、DB所有者への攻撃耐性ではない。
-SQLite adapterはJSON payloadと参照テーブルを使うため、複雑な分析SQLには将来index/列の追加が必要になりうる。
+Assessment and Review add volume. A lightweight hand-written schema validator stays, sharing definitions with the public JSON Schema; extending the covered subset adds tests.
+No cryptographic tamper resistance or authentication. Immutability guards against mistakes and history loss, not against the DB owner.
+The SQLite adapter uses JSON payloads with reference tables, so complex analytical SQL may later need index/column additions.
 
-## 見直し条件
+## Revisit when
 
-実利用で書き込みの手間が大きい、短語検索が重い、並列agentでロック待ちが目立つ、原典版の集約が必要、複数前提推論が表せない等の具体的な例を得たとき。
-抽象的な将来の拡張性だけでは層やサービスを増やさない。
+Concrete examples arrive from real-world use: costly writes, heavy short-term search, visible lock waits under parallel agents, needed source-edition aggregation, inexpressible multi-premise inference.
+Never add layers or services for abstract future extensibility alone.
