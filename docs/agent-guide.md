@@ -148,11 +148,27 @@ to clear proposed states. Acceptance propagates to neither grounds nor dependent
 A Review's `entry.data.state` is its historical decision; an ordinary record's
 outer `state` is the current working state. Reviews are not themselves reviewable.
 
+To check a stored quote against a file you were explicitly given, use verify;
+it records the outcome as append-only history without touching adopted state:
+
+```sh
+node dist/cli.js verify EVIDENCE_ID --db "$YURAI_DB" --file ./given-source.txt \
+  --edition v1 --actor-kind agent --actor example-agent --request-id req_verify_one
+```
+
+Only the designated bytes are read (UTF-8, up to 4 MiB); URIs stay inert.
+Outcomes are `match`, `mismatch`, `multiple`, or `unreachable`, and Evidence
+views show the latest one with edition/bytes agreement. A match verifies the
+passage, never the claim. `--method normalized` folds case and whitespace on
+both sides and records counts without byte offsets; it never rewrites the
+stored quote.
+
 For an actual error, append the corrected Claim, grounds/Assessments as needed,
 new→old supersedes Relation, and withdrawal of the incorrect old representation
 in one capture. A valid disagreement needs a separate Claim/Assessment, not the
 withdrawal of a correctly attributed opposing statement. Review does not verify
-quotes; v0 always returns `anchor_not_verified`. Privacy erasure is not implemented.
+quotes; use `verify` so the anchor state reflects an actual check.
+Privacy erasure is not implemented.
 
 ## Public synthetic rehearsal
 

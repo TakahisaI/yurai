@@ -5,6 +5,8 @@ export interface Store {
   get(id: string): Entry | undefined;
   insert(entry: Entry): void;
   latestReview(id: string): Entry | undefined;
+  latestVerification(evidenceId: string): Entry | undefined;
+  schemaVersion(): number;
   incoming(id: string, limit: number, offset: number): Entry[];
   search(kind: 'claim' | 'source', tokens: string[], includeInactive: boolean, limit: number, offset: number): Entry[];
   entries(): Entry[];

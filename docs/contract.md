@@ -42,6 +42,7 @@ Up to 200 records / 1 MiB. `--file -` reads stdin too.
 | capture | Validate and store the whole bundle. dry-run writes neither content nor receipts |
 | add | Wrap a single record into capture |
 | review | Generate a Review record and capture it |
+| verify | Match an Evidence quote against a local file; store the outcome as history |
 | search | Claim-centered literal AND search. kind=source searches Sources. --expand evidence also routes Evidence matches to Claims |
 | show ID | Display the target, latest Review, direct references, connections, and each Evidence's Source |
 | show --request-id ID | Inspect records created by one persisted capture, their immediate grounds, and current states |
@@ -78,6 +79,40 @@ states. A `context` or `reports` match never becomes `supports`.
 Discovery scans Evidence records per query (no new index or migration) and
 suits small ledgers only. Finding a passage verifies neither the quotation
 nor the claim: `anchor_not_verified` still applies and truth stays unevaluated.
+
+## Verifying a quotation
+
+`verify EVIDENCE_ID --file PATH [--edition LABEL] [--method verbatim|normalized]`
+checks the Evidence quote against explicitly given local bytes (UTF-8, up to
+4 MiB; `--file -` reads stdin) and stores one append-only `verification`
+record through the usual atomic capture. Nothing is fetched: URIs stay inert
+and only the designated bytes are read. The event ID derives from the
+`request_id`, so re-running with the same `--request-id` replays.
+
+Outcomes: `match` (exactly one affix-qualified occurrence), `mismatch` (none),
+`multiple` (more than one; offsets capped at 50 with a total count),
+`unreachable` (the file could not be read; no byte fields, reason required).
+Verbatim matching is exact substring search with optional prefix/suffix
+adjacency; `normalized` instead folds NFKC, lowercase, and whitespace runs to
+single spaces on both sides, records `method: normalized`, and stores counts
+without byte offsets, which would not map to the source. Originals are never
+rewritten: a normalized match leaves the stored quote untouched.
+
+Each checked outcome pins `searched_sha256`/`searched_bytes` of the examined
+bytes; verbatim matches additionally pin `passage_sha256`, `byte_offset`, and
+`byte_length`. Evidence views carry the latest verification with
+edition/bytes agreement against the Source's declared `version` and
+`content_sha256` (`match`, `mismatch`, or `unknown` when either side is
+undeclared). Warnings read `anchor_match`, `anchor_mismatch`,
+`anchor_multiple`, `anchor_unreachable`, or `anchor_not_verified` when never
+checked. A match verifies the passage, never the claim: `truth_evaluated`
+stays false and adopted state is untouched. Reviews never target verifications.
+
+Locator-only Evidence has no quote to match and fails validation, as do
+non-UTF-8 bytes and oversize input. Verification history rides the normal
+export/restore path losslessly. Schema v2 admits the record type; v1 ledgers
+migrate forward automatically on first open by any command, reads included
+(see architecture).
 
 ## Inspecting one capture
 
@@ -124,7 +159,7 @@ Withdraw a wrong old Evidence and add a corrected location under a new ID with i
 `from_claim_id --relation--> to_claim_id`. from supports/limits/extends/replaces to.
 `Assessment.claim_id` is the interpretation target; `evidence_id` is the grounding passage; rationale is why they connect.
 Never implicitly convert `reports` into `supports`. contradicts keeps comparable-scope reasons in rationale.
-An accepted Review still leaves `anchor_not_verified` on the Evidence.
+An accepted Review never changes the Evidence anchor state; only a verification outcome does.
 
 ## Output and errors
 

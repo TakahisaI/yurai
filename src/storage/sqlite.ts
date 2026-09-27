@@ -6,12 +6,17 @@ import type { Entry, Receipt } from '../core/model.js';
 import type { Store } from '../core/ports.js';
 
 const APPLICATION_ID = 0x59555249; // YURI; prevents opening unrelated SQLite files.
-const migration = `
-CREATE TABLE records (
+const CURRENT_SCHEMA = 2;
+const RECORDS_DDL = (name: string, types: string) => `CREATE TABLE ${name} (
   seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE,
-  type TEXT NOT NULL CHECK(type IN ('source','claim','evidence','assessment','relation','review')),
+  type TEXT NOT NULL CHECK(type IN (${types})),
   body TEXT NOT NULL CHECK(json_valid(body)), actor TEXT NOT NULL CHECK(json_valid(actor)), created_at TEXT NOT NULL
-) STRICT;
+) STRICT;`;
+const V2_TYPES = `'source','claim','evidence','assessment','relation','review','verification'`;
+const RECORDS_TRIGGERS = ['UPDATE', 'DELETE'].map(op =>
+  `CREATE TRIGGER records_${op.toLowerCase()} BEFORE ${op} ON records BEGIN SELECT RAISE(ABORT, 'immutable ledger'); END;`).join('\n');
+const migration = `
+${RECORDS_DDL('records', V2_TYPES)}
 CREATE TABLE links (
   from_id TEXT NOT NULL REFERENCES records(id) DEFERRABLE INITIALLY DEFERRED,
   to_id TEXT NOT NULL REFERENCES records(id) DEFERRABLE INITIALLY DEFERRED,
@@ -24,8 +29,17 @@ CREATE VIRTUAL TABLE lookup USING fts5(id UNINDEXED, kind UNINDEXED, text, token
 ${['records', 'links', 'receipts'].map(t => ['UPDATE', 'DELETE'].map(op =>
   `CREATE TRIGGER ${t}_${op.toLowerCase()} BEFORE ${op} ON ${t} BEGIN SELECT RAISE(ABORT, 'immutable ledger'); END;`).join('\n')).join('\n')}
 PRAGMA application_id = ${APPLICATION_ID};
-PRAGMA user_version = 1;
+PRAGMA user_version = ${CURRENT_SCHEMA};
 `;
+/** v1 -> v2: admit the verification record type. Rebuilds records (SQLite cannot
+ *  drop a CHECK), preserving seq so insertion order survives. Foreign keys go
+ *  off around one transaction: DROP TABLE under enforced deferred FKs always
+ *  fails at commit, while the pragma itself cannot flip inside a transaction.
+ *  A crash anywhere leaves user_version 1 with v1 data intact, so reopening
+ *  simply retries; reference integrity is checked before and after. */
+function foreignKeyCheck(db: DatabaseSync): unknown[] {
+  return db.prepare('PRAGMA foreign_key_check').all();
+}
 type Row = Record<string, unknown>;
 function decode(row: Row): Entry {
   return { id: row.id, type: row.type, data: JSON.parse(row.body as string),
@@ -49,17 +63,35 @@ export class SqliteStore implements Store {
     this.db = new DatabaseSync(path);
     try {
       this.db.exec('PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;');
-      this.transaction(() => {
-        const version = Number(this.db.prepare('PRAGMA user_version').get()?.user_version);
-        const app = Number(this.db.prepare('PRAGMA application_id').get()?.application_id);
-        if (version === 0 && app === 0) {
-          const tables = Number(this.db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").get()?.n);
-          if (!create || tables) fail('SCHEMA', 'Refusing to initialize an unrecognized database');
-          this.db.exec(migration);
-        } else if (version !== 1 || app !== APPLICATION_ID) fail('SCHEMA', 'Unsupported ledger identity or schema version');
-      });
+      const version = Number(this.db.prepare('PRAGMA user_version').get()?.user_version);
+      const app = Number(this.db.prepare('PRAGMA application_id').get()?.application_id);
+      if (version === 0 && app === 0) {
+        const tables = Number(this.db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").get()?.n);
+        if (!create || tables) fail('SCHEMA', 'Refusing to initialize an unrecognized database');
+        this.transaction(() => { this.db.exec(migration); });
+      } else if (app !== APPLICATION_ID) fail('SCHEMA', 'Unsupported ledger identity or schema version');
+      else if (version === 1) this.migrateV1toV2();
+      else if (version !== CURRENT_SCHEMA) fail('SCHEMA', 'Unsupported ledger identity or schema version');
       this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;');
     } catch (error) { this.db.close(); throw error; }
+  }
+  private migrateV1toV2(): void {
+    if (foreignKeyCheck(this.db).length) fail('SCHEMA', 'v1 ledger failed integrity; refusing migration');
+    this.db.exec('PRAGMA foreign_keys=OFF;');
+    try {
+      this.transaction(() => {
+        this.db.exec(`${RECORDS_DDL('records_new', V2_TYPES)}
+INSERT INTO records_new(seq,id,type,body,actor,created_at) SELECT seq,id,type,body,actor,created_at FROM records;
+DROP TABLE records;
+ALTER TABLE records_new RENAME TO records;
+CREATE INDEX review_target ON records(json_extract(body, '$.target_id'), seq) WHERE type='review';
+${RECORDS_TRIGGERS}
+PRAGMA user_version = 2;`);
+      });
+    } finally {
+      this.db.exec('PRAGMA foreign_keys=ON;');
+    }
+    if (foreignKeyCheck(this.db).length) fail('SCHEMA', 'migration broke references');
   }
   close(): void { this.db.close(); }
   transaction<T>(fn: () => T): T {
@@ -81,6 +113,14 @@ export class SqliteStore implements Store {
   latestReview(id: string): Entry | undefined {
     const row = this.db.prepare("SELECT * FROM records WHERE type='review' AND json_extract(body,'$.target_id')=? ORDER BY seq DESC LIMIT 1").get(id);
     return row ? decode(row) : undefined;
+  }
+  latestVerification(evidenceId: string): Entry | undefined {
+    const row = this.db.prepare(`SELECT r.* FROM records r JOIN links l ON r.id=l.from_id
+      WHERE l.to_id=? AND r.type='verification' ORDER BY r.seq DESC LIMIT 1`).get(evidenceId);
+    return row ? decode(row) : undefined;
+  }
+  schemaVersion(): number {
+    return Number(this.db.prepare('PRAGMA user_version').get()?.user_version);
   }
   incoming(id: string, limit: number, offset: number): Entry[] {
     return this.db.prepare('SELECT DISTINCT r.* FROM records r JOIN links l ON r.id=l.from_id WHERE l.to_id=? ORDER BY r.seq DESC LIMIT ? OFFSET ?')
@@ -119,7 +159,7 @@ export class SqliteStore implements Store {
     const index = new Map(actual.map(r => [r.id, r]));
     const consistent = actual.length === expected.length && expected.every(e => index.get(e.id)?.text === searchText(e) && index.get(e.id)?.kind === e.type);
     return { ok: integrity.every(r => r.integrity_check === 'ok') && !foreignKeys.length && consistent,
-      schema_version: 1, sqlite_version: this.db.prepare('SELECT sqlite_version() AS v').get()?.v,
+      schema_version: this.schemaVersion(), sqlite_version: this.db.prepare('SELECT sqlite_version() AS v').get()?.v,
       records: this.count(), foreign_key_errors: foreignKeys, search_index_consistent: consistent,
       integrity, truth_evaluated: false };
   }

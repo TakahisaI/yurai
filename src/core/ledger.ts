@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import { fail, matchedEvidenceFields, normalize, pageBounds, parseBundle, parseSnapshot, references } from './model.js';
-import type { Entry, EvidenceField, Input, Snapshot, State } from './model.js';
+import type { Actor, Entry, EvidenceField, Input, Snapshot, State } from './model.js';
 import type { Store } from './ports.js';
+import { MAX_VERIFY_BYTES, matchQuote } from './verify.js';
 
 function canonical(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
@@ -10,6 +11,9 @@ function canonical(value: unknown): string {
     .map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(',')}}`;
 }
 function digest(value: unknown): string { return createHash('sha256').update(canonical(value)).digest('hex'); }
+function sameVerifier(stored: Actor, claimed: { kind: string; id: string; model?: string }): boolean {
+  return stored.kind === claimed.kind && stored.id === claimed.id && (stored.model ?? null) === (claimed.model ?? null);
+}
 export class Ledger {
   constructor(private readonly store: Store, private readonly now = () => new Date().toISOString()) {}
   private required(id: string): Entry { return this.store.get(id) ?? fail('NOT_FOUND', `No record: ${id}`); }
@@ -23,8 +27,14 @@ export class Ledger {
     for (const input of inputs) for (const ref of references(input)) {
       const target = byId.get(ref.id) ?? this.store.get(ref.id);
       if (!target) fail('NOT_FOUND', `${input.id}: missing ${ref.role} ${ref.id}`);
-      if (ref.kind === 'reviewable' ? target.type === 'review' : target.type !== ref.kind)
+      if (ref.kind === 'reviewable' ? target.type === 'review' || target.type === 'verification' : target.type !== ref.kind)
         fail('VALIDATION', `${input.id}: ${ref.role} has wrong record type`);
+    }
+    for (const input of inputs) {
+      if (input.type !== 'verification') continue;
+      const evidence = byId.get(input.data.target_evidence_id) ?? this.store.get(input.data.target_evidence_id);
+      if (evidence?.type === 'evidence' && evidence.data.source_id !== input.data.target_source_id)
+        fail('VALIDATION', `${input.id}: verification names a different source than its evidence`);
     }
     // Supersession is historical replacement, not a general reasoning edge.
     const replacements = [...this.store.entries(), ...inputs].filter(e => e.type === 'relation' && e.data.relation === 'supersedes');
@@ -59,20 +69,92 @@ export class Ledger {
       return { ...result, replayed: false, dry_run: dryRun };
     });
   }
+  private verificationSummary(entry: Entry) {
+    if (entry.type !== 'evidence') return undefined;
+    const found = this.store.latestVerification(entry.id);
+    if (!found || found.type !== 'verification') return null;
+    const source = this.store.get(entry.data.source_id);
+    const declaredEdition = source?.type === 'source' ? source.data.version ?? null : null;
+    const declaredBytes = source?.type === 'source' ? source.data.content_sha256 ?? null : null;
+    const checkedEdition = found.data.edition ?? null, searched = found.data.searched_sha256 ?? null;
+    const agreement = (a: string | null, b: string | null) => a && b ? (a === b ? 'match' as const : 'mismatch' as const) : 'unknown' as const;
+    return { id: found.id, outcome: found.data.outcome, method: found.data.method, verified_at: found.data.verified_at,
+      actor: found.actor, edition: { declared: declaredEdition, checked: checkedEdition, agreement: agreement(declaredEdition, checkedEdition) },
+      bytes: { declared: declaredBytes, searched, agreement: agreement(declaredBytes, searched) },
+      detail: found.data.detail ?? null };
+  }
   private view(entry: Entry) {
     const review = this.store.latestReview(entry.id);
     const state: State = review?.type === 'review' ? review.data.state : 'proposed';
     const warnings: string[] = [];
-    if (entry.type !== 'review' && state === 'proposed') warnings.push('not_reviewed');
+    if (entry.type !== 'review' && entry.type !== 'verification' && state === 'proposed') warnings.push('not_reviewed');
     if (state === 'rejected' || state === 'withdrawn') warnings.push('inactive_record');
-    if (entry.type === 'evidence') warnings.push('anchor_not_verified');
+    const verification = this.verificationSummary(entry);
+    if (entry.type === 'evidence') warnings.push(verification ? `anchor_${verification.outcome}` : 'anchor_not_verified');
     if (entry.type === 'source') {
       if (!entry.data.version && !entry.data.content_sha256) warnings.push('source_version_not_pinned');
       if (!entry.data.snapshot_uri) warnings.push('no_snapshot_reference');
       if (entry.data.medium === 'conversation') warnings.push('conversation_is_not_independent_corroboration');
     }
     if (entry.type === 'claim' && entry.data.attributed_to === 'unknown') warnings.push('unknown_attribution');
-    return { entry, state, review: review ?? null, warnings };
+    return entry.type === 'evidence' ? { entry, state, review: review ?? null, warnings, verification } : { entry, state, review: review ?? null, warnings };
+  }
+  verifyEvidence(input: { evidence_id: string; content: Buffer | null; edition?: string;
+    method?: 'verbatim' | 'normalized'; detail?: string; actor: { kind: string; id: string; model?: string };
+    request_id: string; dryRun?: boolean }) {
+    const { evidence_id, content, edition, detail } = input;
+    const method = input.method ?? 'verbatim';
+    if (method !== 'verbatim' && method !== 'normalized') fail('VALIDATION', 'method must be verbatim or normalized');
+    const evidence = this.required(evidence_id);
+    if (evidence.type !== 'evidence') fail('VALIDATION', `${evidence_id}: not evidence`);
+    const id = `vrf_${createHash('sha256').update(input.request_id).digest('hex')}`;
+    const verified_at = this.now();
+    type Data = Extract<Input, { type: 'verification' }>['data'];
+    let data: Data;
+    if (content === null) {
+      data = { target_evidence_id: evidence_id, target_source_id: evidence.data.source_id, outcome: 'unreachable',
+        method, verified_at, detail: detail ?? 'No checkable content was provided', ...(edition === undefined ? {} : { edition }) };
+    } else {
+      if (content.length > MAX_VERIFY_BYTES) fail('VALIDATION', `content exceeds the ${MAX_VERIFY_BYTES}-byte verification limit`);
+      let text: string;
+      try { text = new TextDecoder('utf-8', { fatal: true }).decode(content); }
+      catch { fail('VALIDATION', 'content is not valid UTF-8 text'); }
+      const quote = evidence.data.quote;
+      if (!quote) fail('VALIDATION', `${evidence_id}: evidence has no quote to match`);
+      const found = matchQuote({ quote, prefix: evidence.data.prefix, suffix: evidence.data.suffix }, text, method);
+      const searched_sha256 = createHash('sha256').update(content).digest('hex');
+      const base = { target_evidence_id: evidence_id, target_source_id: evidence.data.source_id, verified_at,
+        searched_sha256, searched_bytes: content.length,
+        ...(edition === undefined ? {} : { edition }), ...(detail === undefined ? {} : { detail }) };
+      if (found.outcome === 'mismatch') {
+        data = { ...base, outcome: found.outcome, method };
+      } else if (method === 'normalized') {
+        data = { ...base, outcome: found.outcome, method, occurrences: found.occurrences };
+      } else if (found.outcome === 'match') {
+        const start = found.offsets[0]!, passage = text.slice(start, start + quote.length);
+        const byte_offset = Buffer.byteLength(text.slice(0, start));
+        data = { ...base, outcome: found.outcome, method, occurrences: 1,
+          passage_sha256: createHash('sha256').update(passage).digest('hex'), byte_offset, byte_length: Buffer.byteLength(passage) };
+      } else {
+        data = { ...base, outcome: found.outcome, method, occurrences: found.occurrences,
+          occurrence_offsets: found.offsets.slice(0, 50).map(at => Buffer.byteLength(text.slice(0, at))) };
+      }
+    }
+    const receipt = this.store.receipt(input.request_id);
+    if (receipt) {
+      const stored = this.store.get(id);
+      // verified_at is the retry's own timestamp, not functional content: the same
+      // verification by the same verifier under a new timestamp replays instead of conflicting.
+      if (stored?.type === 'verification' && sameVerifier(stored.actor, input.actor)
+        && canonical({ ...stored.data, verified_at: '' }) === canonical({ ...data, verified_at: '' }))
+        return { ...receipt, replayed: true, dry_run: input.dryRun ?? false,
+          outcome: stored.data.outcome, verification: this.view(stored) };
+    }
+    const result = this.capture({ version: 1, actor: input.actor, request_id: input.request_id,
+      entries: [{ id, type: 'verification', data }] }, input.dryRun ?? false);
+    // capture() above already validated the actor; the preview below only renders it.
+    const entry = this.store.get(id) ?? { id, type: 'verification' as const, data, created_at: verified_at, actor: input.actor as Actor };
+    return { ...result, outcome: data.outcome, verification: this.view(entry) };
   }
   search(query: string, options: { kind?: 'claim' | 'source'; limit?: number; offset?: number; includeInactive?: boolean; expand?: 'evidence' } = {}) {
     const { kind = 'claim', limit = 20, offset = 0, includeInactive = false, expand } = options;

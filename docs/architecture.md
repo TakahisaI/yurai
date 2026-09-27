@@ -17,6 +17,7 @@ src/core/model.ts            types, input schema, local validation
 Core depends on neither CLI, MCP, file retrieval, model APIs, nor SQLite.
 It uses Node's standard cryptographic hash and URL parsing. Model independence is not the same as runtime independence.
 New entry points delegate to the same Ledger. Writing to the Store directly from an adapter is forbidden.
+Quote matching is a pure Core function over caller-supplied bytes; reading files stays in the CLI adapter, which persists outcomes only through atomic capture.
 
 ## Why this size
 
@@ -65,7 +66,14 @@ When a relation target is unaccepted or withdrawn, include that state in the res
 ## Integrity, migration, backup
 
 `application_id` and `user_version` identify our own DB. Never silently initialize an unknown or future-version DB.
-The v1 migration is the initial schema only. Later changes add numbered forward migrations with tests on old-version fixtures.
+The v1 migration is the initial schema only. v2 admits the `verification` record
+type by rebuilding the `records` table (SQLite cannot drop a CHECK), preserving
+`seq` so insertion order survives. Known v1 ledgers migrate automatically on
+open inside one transaction with foreign keys off (DROP TABLE under enforced
+deferred FKs always fails at commit); reference integrity is checked before
+and after, and a crash leaves v1 data with version 1, so reopening retries.
+Unknown or future versions are still refused. Each migration ships with a
+frozen old-schema fixture and a test proving lossless forward movement.
 WAL, foreign_keys, busy_timeout, and synchronous=FULL are set.
 
 export reads all records and receipts from one transaction, preserving Review insertion order.
