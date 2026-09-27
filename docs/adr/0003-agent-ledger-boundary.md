@@ -129,3 +129,13 @@ This decision reduces mandatory agent bookkeeping but cannot guarantee the behav
 of every host/model. The skill is guidance, not an authorization sandbox. The
 read-only inspection use case makes no ledger writes; v0's SQLite opening and
 transaction behavior is unchanged and is not a filesystem read-only mode.
+
+## Amendment — default-first persistence target (2026-09-27)
+
+Section 2's "ask once when a target/scope is genuinely missing" proved to be
+per-session friction without safety value: the CLI already defines a default
+chain, so the target is rarely truly missing. Revised rule, now in the skill
+and guide: use the default chain (explicit `--db`, else `$YURAI_DB`, else
+`~/.yurai/ledger.sqlite`) without asking and state which ledger is in use;
+ask only to narrow scope or for read-only/no-save tasks. The ban on invented
+non-default paths and the permission/state separation stand unchanged.
