@@ -56,14 +56,19 @@ Design rules, normative for the future implementation issue:
    and a recovery path. Accidental deletion must never be reframable as
    privacy. (For ledgers near the 16 MiB snapshot cap, the implementation
    issue must define how the scope export is cut.)
-3. Atomic replacement: rebuild into a NEW file, regenerating lookup rows
-   from the resulting bodies and preserving survivors' `seq` order (the
-   v1→v2 precedent); gate replacement on `doctor` plus a re-export
-   comparison against a computed expectation — for purge, the pre-delete
-   export minus the doomed scope (entries, their links and lookup rows,
-   and affected receipts gone; everything else byte-identical); for
-   redaction, the same entry IDs with tombstoned bodies, preserved
-   links, regenerated lookup, and dropped affected receipts.
+3. Atomic replacement: rebuild into a NEW file, regenerating links and
+   lookup rows from the resulting bodies and preserving survivors' `seq`
+   order (the v1→v2 precedent); gate replacement on `doctor`, an exact
+   link-set verification, and a re-export comparison against a computed
+   expectation — for purge, the pre-delete export minus the doomed scope
+   (entries, their links and lookup rows, and affected receipts gone;
+   everything else byte-identical); for redaction, the same entry IDs
+   with tombstoned bodies, preserved links, regenerated lookup, and
+   dropped affected receipts. Snapshots carry entries and receipts only
+   and `doctor` checks FK validity rather than link exactness, so a
+   missing or wrong-but-FK-valid link would pass both: the link table
+   must be compared against `references(entry)` over all entries, in
+   `doctor` or a dedicated verifier, before replacement.
 4. Refuse dangling dependents: purge refuses when surviving records
    reference the doomed scope unless the scope expands to include them;
    the cascade is computed, shown, and confirmed.
@@ -81,10 +86,14 @@ Design rules, normative for the future implementation issue:
    `request_id` only — re-creation of the same content under a NEW
    `request_id` (new IDs, new receipt) is a new recording act,
    indistinguishable without remembering content, and is not stopped.
-   Privacy assumption: digests are opaque under SHA-256 preimage
-   resistance, so the registry leaks only a purge count; anyone who can
-   guess a `request_id` can test its membership, so IDs stay
-   operator-held, like the pre-delete export itself.
+   Leakage: digests are deterministic SHA-256, so the registry leaks
+   the purge count plus membership for any guessable `request_id`
+   (offline dictionary test) — no IDs or content, but more than a bare
+   count. Privacy-sensitive captures should therefore use unguessable
+   `request_id` values. Registry entries must survive export/restore,
+   or a restored ledger forgets purged IDs and admits their replay;
+   the mechanism (snapshot extension or companion artifact) is deferred
+   to the implementation issue.
 6. Audit without resurrection: no in-ledger audit record carries purged
    IDs or content — that would defeat the purge. The pre-delete export
    is the audit artifact, held by the operator. A redaction tombstone
