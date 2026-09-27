@@ -1,131 +1,131 @@
-# yurai — 主張と由来の台帳
+# yurai — A ledger of claims and provenance
 
-決定日: 2026-09-27 / 状態: v0設計として採用
+Decided: 2026-09-27 / Status: adopted as the v0 design
 
-## 1. プロダクトの核
+## 1. Product core
 
-> **会話で得た知識を、帰属・条件・解釈・原典への経路を失わずに、次の会話へ持ち越す。**
+> **Carry knowledge gained in conversation into the next conversation without losing attribution, conditions, interpretations, or the path to sources.**
 
-保存単位は資料でも会話ログでもなく、再利用したい主張と、その主張を理解するために必要な由来である。
-ユーザーは論文の整理やスキーマ編集をしたいわけではない。「この話を残して」「前に調べたことを出して」が主操作になる。
+The unit of storage is not materials or conversation logs but the claims worth reusing and the provenance needed to understand them.
+Users do not want to organize papers or edit schemas. "Keep this discussion" and "show what I looked up before" are the primary operations.
 
-台帳にあることは、事実であることを意味しない。主張者、記録者、解釈者は異なりうる。
-AIが言ったことも記録対象にはなるが、それだけで外界の事実の根拠にはならない。
-一方で「そのAIがその発言をした」という主張に対しては会話自体が原典になりうる。この二つを区別する。
+Presence in the ledger does not mean something is true. The asserter, recorder, and interpreter may differ.
+What AI said can be recorded, but that alone is no ground for facts about the outside world.
+Meanwhile, for a claim like "that AI made that statement," the conversation itself can serve as the source. Keep the two distinct.
 
-## 2. 原案を維持する点
+## 2. What the rework keeps from the original draft
 
-Claim中心、Sourceとの分離、自然言語による主張、SQLite、CLI先行、MCPは薄いadapter、単一利用者・ローカル完結を維持する。
-PDFのレイアウトやハイライト色は台帳のスキーマに持ち込まない。書式を正規化するための資料管理を始めない。
-大きなOntologyを先に定義せず、関係の自動統合や真偽判定もしない。
+Keep Claim-centered modeling, separation from Sources, natural-language claims, SQLite, CLI-first, MCP as a thin adapter, and single-user local operation.
+Do not bring PDF layout or highlight colors into the ledger schema. Do not start material management for format normalization.
+Do not define a large ontology up front, and do not do automatic integration of relations or truth adjudication.
 
-## 3. 原案から変える点
+## 3. What the rework changes from the original draft
 
-| 原案で不足する点 | 再構成した判断 |
+| Gap in the original draft | Reworked decision |
 | --- | --- |
-| 「誰が」の保存先がない | Claimの`attributed_to`と各記録の`actor`を分ける |
-| EvidenceがClaimとの接続と原典箇所を兼ねる | Evidenceを原典箇所に限定し、解釈をAssessmentへ分離する |
-| 資料が主張することと、主張を支持することが混ざる | `reports`と`supports`を分ける |
-| 原典URLが変化する | Sourceを参照した版の記録とし、version・accessed_at・hash・snapshot_uriを保持可能にする |
-| 「後で来歴を追加」すると過去の来歴を失う | 記録者・時刻・Review履歴は最初から持つ |
-| primitiveを連続実行すると途中状態が残る | 原子的・冪等な`capture`を主要な書き込み操作にする |
-| 検索を後の段階にすると利用価値を確認できない | 日本語と短い語の検索をv0に含める |
-| 編集・移行時に記録を失う | immutable record、追記Review、export/restoreをv0に含める |
+| No place to store "who" | Separate Claim `attributed_to` from each record's `actor` |
+| Evidence doubles as the link to a Claim and the source location | Limit Evidence to source locations; move interpretation to Assessment |
+| "The material states it" and "it supports the claim" are mixed | Separate `reports` from `supports` |
+| Source URLs change | Record Source as the consulted edition, optionally holding version, accessed_at, hash, snapshot_uri |
+| "Adding provenance later" loses past provenance | Hold recorder, time, and Review history from the start |
+| Running primitives in sequence leaves partial state | Make atomic, idempotent `capture` the primary write operation |
+| Deferring search hides practical value | Include Japanese and short-term search in v0 |
+| Edits and migrations lose records | Include immutable records, append-only Review, and export/restore in v0 |
 
-複雑さを増やすための正規化ではない。**後から取り戻せない区別だけを今保存する。**
+This normalization does not add complexity for its own sake. **Store now only the distinctions that cannot be recovered later.**
 
-## 4. 意味モデル
+## 4. Semantic model
 
-### Claim — 何が主張されているか
+### Claim — what is asserted
 
-`text`、`kind`、`attributed_to`を必須にする。`kind`はassertion / hypothesis / inference。
-`scope`に適用条件、`why`にこの会話で重要だった理由を残す。いずれも自然言語でよい。
-帰属不明時は`unknown`と明記し、出典の著者を推測して埋めない。
-主張が未検証でも、根拠がまだなくても保存できる。仮説を記録できなければ会話の成果を失う。
+`text`, `kind`, and `attributed_to` are required. `kind` is assertion / hypothesis / inference.
+`scope` holds applicable conditions and `why` holds why it mattered in this conversation. Plain natural language is fine.
+When attribution is unknown, state `unknown` explicitly; do not guess the source's author.
+Claims can be stored unverified and even without grounds. Losing hypotheses means losing the fruits of conversation.
 
-### Source — 原典のどの版を参照したか
+### Source — which edition was consulted
 
-論文、Web、書籍、データセット、コード、実験、会話を同じ器で扱う。
-Sourceの1レコードは、作品の抽象的な名寄せ結果ではなく、参照した資料・版の記述である。
-同じURLの改訂版を見た場合は別IDを作る。DOIやURLの一致だけで統合しない。
+Papers, web pages, books, datasets, code, experiments, and conversations share one container.
+One Source record is not the entity-resolved abstract work but a description of the consulted material and edition.
+Seeing a revised edition of the same URL gets a new ID. Do not merge on matching DOI or URL alone.
 
-`uri`または`identifiers`を必須にする。紙の本ならISBNなどでよい。
-`version`、`accessed_at`、`snapshot_uri`、`content_sha256`は判明したものだけ保存する。
-取得時刻と台帳への記録時刻は別物なので、自動的に同じ値を埋めない。
+`uri` or `identifiers` is required. An ISBN suffices for a printed book.
+`version`, `accessed_at`, `snapshot_uri`, and `content_sha256` hold only what is known.
+Retrieval time and ledger recording time are different things; do not fill in the same value automatically.
 
-**ハッシュは内容の同一性の手掛かりであり、内容そのものや真正性の保証ではない。**
-URLだけではリンク切れ後の再検証はできない。v0はその限界を表示し、取得できたふりをしない。
-原典保全adapterは後続であり、台帳がPDF管理アプリになることはない。
+**A hash is a clue to sameness of content, not the content itself nor a guarantee of authenticity.**
+A URL alone cannot reverify after link rot. v0 surfaces that limit instead of pretending to have fetched.
+A source-preservation adapter comes later; the ledger never becomes a PDF management app.
 
-### Evidence — 原典上のどの部分か
+### Evidence — which part of the source
 
-1つのSourceと、quoteまたはlocatorを持つ。図・表・データセット行なら文章の引用はなくてもよい。
-quoteは原文、paraphraseは要約として別に保持する。引用箇所の前後にprefix/suffixを保存できる。
-locatorはまず人が再発見できる文字列でよく、後に型付きselectorを追加する。
+One Source plus a quote or locator. Figures, tables, or dataset rows need no prose quotation.
+Hold verbatim text in quote and summaries in paraphrase, separately. prefix/suffix around the quoted passage can be stored.
+A locator may start as any string a human can use to rediscover the passage; typed selectors come later.
 
-v0は引用を原典と照合しない。Evidenceは常に`anchor_not_verified`として返す。
-「採用したEvidence」と「原典に一致したEvidence」は同一ではない。
+v0 does not match quotations against sources. Evidence always returns as `anchor_not_verified`.
+An "accepted Evidence" is not the same as an "Evidence matched against its source."
 
-### Assessment — その箇所をどう解釈したか
+### Assessment — how that passage is interpreted
 
-ClaimとEvidenceを結び、stanceとrationaleを持つ。解釈者は記録のactorに残る。
+Links a Claim and an Evidence, with stance and rationale. The interpreter stays in the record's actor.
 
-- `reports`: 原典がその主張を述べている。内容の真実性は評価していない。
-- `supports` / `challenges`: その主張の支持材料 / 反証・疑義の材料と解釈する。
-- `qualifies` / `context`: 条件や限界を与える / 背景情報である。
+- `reports`: the source states the claim. Truth of the content is not assessed.
+- `supports` / `challenges`: interpreted as supporting material / counterevidence or doubts for the claim.
+- `qualifies` / `context`: gives conditions or limits / is background information.
 
-同じ箇所に複数のAssessmentを付けられる。論文数や引用数を独立した証拠の数と扱わない。
-Assessment自身が人間またはAIの主張である。数値的confidenceで事実に格上げしない。
+Multiple Assessments may attach to one passage. Do not treat paper or citation counts as counts of independent evidence.
+An Assessment is itself a human or AI assertion. Do not promote it to fact with numeric confidence.
 
-### Relation — 主張と主張の間をどう捉えたか
+### Relation — how two claims relate
 
-両端はClaim。supports / contradicts / qualifies / extends / related / supersedesを持つ。
-関係にもrationaleとactorを要求する。単なる「AIが付けた線」を無条件に信じない。
-向きはfromがtoに対して作用する。contradictsとrelatedも保存方向を残し、表示時は両方向から辿れる。
-supersedesは新→旧。循環は禁止するが、自動的に旧主張を削除・撤回はしない。
+Both ends are Claims. Holds supports / contradicts / qualifies / extends / related / supersedes.
+Relations also require rationale and actor. Do not blindly trust bare "AI-drawn links."
+Direction reads: from acts on to. Keep the stored direction for contradicts and related too; traverse both ways when displaying.
+supersedes runs new → old. Cycles are forbidden, but old claims are never auto-deleted or auto-withdrawn.
 
-supportsやcontradictsを推移的に伝播しない。異なる母集団や実験条件を同一視しない。
-複数前提を必要とする推論全体の表現は、具体的な需要が出るまで導入しない。
+Do not propagate supports or contradicts transitively. Do not conflate different populations or experimental conditions.
+Do not introduce whole-inference expressions needing multiple premises until concrete demand appears.
 
-### Review — 記録をどう扱うか
+### Review — how to treat a record
 
-5種類の内容レコードに対する追記イベント。stateはproposed / accepted / rejected / withdrawn。
-内容は初期状態proposed。最新のReviewを有効な作業状態とする。
-acceptedは「この記録を残すという判断」であり「正しい」「引用確認済み」「人間承認済み」ではない。
-AIによるreviewも可能だが、誰の判断かを必ず表示する。認証基盤はない。
+Append-only events against the five content record types. States are proposed / accepted / rejected / withdrawn.
+Content starts in proposed. The latest Review by insertion order is the effective working state.
+accepted means "a decision to keep this record," not "correct," "quote-checked," or "human-approved."
+AI may review too, but always display whose judgment it is. There is no authentication infrastructure.
 
-## 5. 利用の閉じた循環
+## 5. The closed loop of use
 
-1. **Capture**: 既存のAIとの会話からbundleを作り、dry-runで確認して一括保存する。
-2. **Recall**: Claimを検索し、Assessment・Evidence・Source・Relationを必要な分だけ読む。
-3. **Revisit**: 疑問が出たら原典を外部で再確認し、解釈や主張を追加・撤回する。
+1. **Capture**: build a bundle from a conversation with an existing AI, check it with dry-run, store it at once.
+2. **Recall**: search Claims and read the needed Assessments, Evidence, Sources, and Relations.
+3. **Revisit**: when doubts arise, recheck the source externally and add or withdraw interpretations and claims.
 
-Sourceの再読は最後でよいが、必要なら必ず辿れることを目指す。検索結果を最終回答にする際も根拠・留保・未確認状態を落とさない。
-会話への自動アクセス、チャットアプリ内の自動保存、モデルへの自動再投入はv0の機能ではない。
+Re-reading the source can come last but must always be reachable. When turning search results into a final answer, keep grounds, reservations, and unverified states.
+Automatic access to conversations, automatic saving inside chat apps, and automatic re-feeding into models are not v0 features.
 
-## 6. 最初の成功条件
+## 6. First success criteria
 
-実利用で次の3ケースを再現する。
+Reproduce three cases in real-world use.
 
-- 一つの論点について、支持材料と疑義の材料を元チャットなしで取り出せる。
-- 自分の仮説・AIの推論・原典の主張を取り違えず、保存した理由と条件を取り出せる。
-- 誤った引用や改訂された資料を発見したとき、旧記録を消さずに訂正と経緯を残せる。
+- For one topic, retrieve supporting and doubting materials without the original chat.
+- Retrieve one's own hypothesis, an AI inference, and a source's claim without confusion, with saved reasons and conditions.
+- On finding a wrong quotation or a revised material, keep the correction and its history without deleting the old record.
 
-保存のために会話を中断する負担、取り出せた内容の正確さ、原典への到達可能性を観察する。
-最初から大規模ベンチマークを作らない。ただしunit test合格を利用価値の実証と混同しない。
+Observe the burden of interrupting conversation to store, the accuracy of retrieved content, and the reachability of sources.
+Do not build a large benchmark up front. But never confuse passing unit tests with proving practical value.
 
-## 7. 明確な非目標
+## 7. Explicit non-goals
 
-資料ビューア、チャット全文管理、ノート編集、引用書式、万能KG、RDF互換、LLM実行基盤、完全自動抽出、真偽の自動裁定、チーム共有、クラウド同期。
-知識を保存するアプリに見せかけて、新しいハーネスやRAGプラットフォームを作らない。
+Material viewers, full-chat management, note editing, citation formatting, universal KG, RDF compatibility, LLM runtimes, fully automatic extraction, automatic truth adjudication, team sharing, cloud sync.
+Do not build a new harness or RAG platform disguised as a knowledge-storing app.
 
-## 8. 参考にした一次資料
+## 8. Primary sources consulted
 
-以下は設計上の参照先であり、yuraiの有効性を実証する論文ではない。
+These are design references, not papers proving yurai's effectiveness.
 
-- W3C PROV-DM: entity / activity / agentを区別する来歴モデル。全文の実装やRDFの採用はしない。https://www.w3.org/TR/prov-dm/
-- W3C Web Annotation Data Model: TextQuoteSelectorのexact/prefix/suffixと、変化する原典のstate。v0はその考え方を借りるがW3C準拠を標榜しない。https://www.w3.org/TR/annotation-model/
-- SQLite FTS5: trigramによる部分文字列検索と3文字未満の制約。https://www.sqlite.org/fts5.html
-- Node.js SQLite API: 標準SQLite境界と同期API。https://nodejs.org/api/sqlite.html
+- W3C PROV-DM: a provenance model distinguishing entity / activity / agent. Does not implement the full text or adopt RDF. https://www.w3.org/TR/prov-dm/
+- W3C Web Annotation Data Model: TextQuoteSelector exact/prefix/suffix and the state of changing sources. v0 borrows the concepts without claiming W3C conformance. https://www.w3.org/TR/annotation-model/
+- SQLite FTS5: trigram substring search and the sub-3-character limitation. https://www.sqlite.org/fts5.html
+- Node.js SQLite API: the standard SQLite boundary and sync API. https://nodejs.org/api/sqlite.html
 
-原案にあった個別の最新研究名は、未検証の要約を製品設計の根拠として継承しない。必要になった段階で原典を確認して追加する。
+Individual recent study names from the original draft are not inherited: unverified summaries must not ground product design. Add them after checking sources when needed.

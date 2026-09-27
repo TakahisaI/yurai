@@ -1,41 +1,41 @@
 # Bootstrap validation
 
-確認日: 2026-09-27
+Checked: 2026-09-27
 
-## 実行済み
+## Done
 
 - Linux / Node.js v22.16.0 / SQLite 3.49.1
 - TypeScript 5.8.3 / @types/node 22.15.33
-- `npm run check`: 型検査・build・21 tests、すべて成功
-- CLIの別processでinit→capture→search→show→review→export→restore→doctor
-- 日本語・1〜2文字・NFKC・literal記号検索
-- 参照整合性、前方参照、途中失敗のrollback、再試行、変更済みrequest_idの拒否
-- reviewの順序と撤回済み根拠、supersedes循環の拒否
-- snapshotの内容・来歴・receipt round-trip、不正snapshotのrollback
-- DB再open、未知/将来schemaの拒否、UPDATE/DELETE拒否
+- `npm run check`: typecheck, build, 21 tests, all green
+- Separate CLI processes for init→capture→search→show→review→export→restore→doctor
+- Japanese, 1–2 character, NFKC, and literal-symbol search
+- Reference integrity, forward references, rollback on mid-way failure, retry, rejection of changed request_id
+- Review ordering and withdrawn grounds, supersedes cycle rejection
+- Snapshot content, provenance, and receipt round-trip; rollback of invalid snapshots
+- DB reopen, unknown/future schema rejection, UPDATE/DELETE rejection
 
-## GitHub Actionsでのclean CI — 成功
+## Clean CI on GitHub Actions — green
 
-実装commit: `d583c498098583822dec34eaff1e79134e9d90fb`
+Implementation commit: `d583c498098583822dec34eaff1e79134e9d90fb`
 
-[CI run #1](https://github.com/TakahisaI/yurai/actions/runs/36283356241)の4 jobがすべて成功した。
-各jobで`npm ci --ignore-scripts`と`npm run check`を実行した。
+[CI run #1](https://github.com/TakahisaI/yurai/actions/runs/36283356241) passed all 4 jobs.
+Each job ran `npm ci --ignore-scripts` and `npm run check`.
 
-| OS | Node | 結果 |
+| OS | Node | Result |
 | --- | --- | --- |
-| Ubuntu | 22.16.0 | 成功 |
-| Ubuntu | 24系 | 成功 |
-| macOS | 24系 | 成功 |
-| Windows | 24系 | 成功 |
+| Ubuntu | 22.16.0 | Pass |
+| Ubuntu | 24.x | Pass |
+| macOS | 24.x | Pass |
+| Windows | 24.x | Pass |
 
-## ローカル検証方法の制約
+## Local verification limits
 
-初期構築環境はnpm registryへDNS接続できなかったため、同じ固定バージョンのローカル既存開発パッケージを使って検証した。
-lockfileのresolved/integrityは環境内の既存lockfileから取得し、バージョンを照合した。
-このローカル環境でclean `npm ci`が成功したとは主張しない。clean installは上記のGitHub Actionsで別途検証し成功した。
+The bootstrap environment had no DNS route to the npm registry, so verification used identical pinned versions of locally present dev packages.
+lockfile resolved/integrity entries came from the environment's existing lockfile, with versions cross-checked.
+This does not claim a clean `npm ci` succeeded in that local environment. Clean install was verified separately on GitHub Actions above.
 
-## 未検証・未実装
+## Unverified / unimplemented
 
-Node 24、macOS、Windowsの検証は上記CI上で行ったものであり、このローカル環境で実行したものではない。
-実利用、並列process競合、異常終了時の耐久性、大規模台帳の性能は未検証。
-原典内容の照合・到達性や研究結果の正しさをテストしているわけではない。fixtureは人工データ。
+Node 24, macOS, and Windows were verified on CI above, not in that local environment.
+Real-world use, parallel-process races, crash durability, and large-ledger performance are unverified.
+Nothing here tests source-content matching, reachability, or correctness of research findings. Fixtures are synthetic.

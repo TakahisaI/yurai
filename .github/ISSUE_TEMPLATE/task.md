@@ -1,17 +1,17 @@
 ---
 name: Development task
-about: 一つの検証可能な変更
+about: One verifiable change
 ---
-## 解決する利用上の問題
+## Problem in use to solve
 
-## スコープ / 非スコープ
+## Scope / Non-scope
 
-## 受入条件
+## Acceptance criteria
 
 - [ ]
 
-## 回帰テスト
+## Regression tests
 
-## 依存・設計資料
+## Dependencies and design references
 
-実データや私的な会話、台帳を公開Issueへ添付しないでください。
+Do not attach real data, private conversations, or ledgers to public issues.
