@@ -80,12 +80,16 @@ function searchText(e: Entry): string | undefined {
 }
 export class SqliteStore implements Store {
   private readonly db: DatabaseSync;
-  constructor(path: string, create = false) {
+  private readonly readOnly: boolean;
+  constructor(path: string, create = false, options: { readonly?: boolean } = {}) {
+    this.readOnly = options.readonly ?? false;
+    if (this.readOnly && create) fail('USAGE', 'readonly mode cannot create or initialize a ledger');
+    if (this.readOnly && path === ':memory:') fail('USAGE', 'readonly mode needs an existing file ledger');
     if (path !== ':memory:' && !existsSync(path)) {
       if (!create) fail('NOT_FOUND', 'Ledger does not exist. Run yurai init with the same --db path.');
       mkdirSync(dirname(path), { recursive: true });
     }
-    this.db = new DatabaseSync(path);
+    this.db = this.readOnly ? new DatabaseSync(path, { readOnly: true }) : new DatabaseSync(path);
     try {
       this.db.exec('PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;');
       const version = Number(this.db.prepare('PRAGMA user_version').get()?.user_version);
@@ -95,8 +99,12 @@ export class SqliteStore implements Store {
         if (!create || tables) fail('SCHEMA', 'Refusing to initialize an unrecognized database');
         this.transaction(() => { this.db.exec(migration); });
       } else if (app !== APPLICATION_ID) fail('SCHEMA', 'Unsupported ledger identity or schema version');
-      else if (version !== CURRENT_SCHEMA) this.applyMigrations(version);
-      this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;');
+      else if (version !== CURRENT_SCHEMA) {
+        if (version < 1 || version > CURRENT_SCHEMA) fail('SCHEMA', 'Unsupported ledger identity or schema version');
+        if (this.readOnly) fail('SCHEMA', `schema v${version} needs migration; reopen without --readonly to migrate`);
+        this.applyMigrations(version);
+      }
+      if (!this.readOnly) this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;');
     } catch (error) { this.db.close(); throw error; }
   }
   private applyMigrations(version: number): void {
@@ -122,7 +130,10 @@ export class SqliteStore implements Store {
   }
   close(): void { this.db.close(); }
   transaction<T>(fn: () => T): T {
-    this.db.exec('BEGIN IMMEDIATE');
+    // Readonly keeps a deferred read snapshot so multi-query reads (export,
+    // expanded search) stay consistent; mutators refuse first, and SQLite
+    // readOnly is the backstop against any write slipping through.
+    this.db.exec(this.readOnly ? 'BEGIN' : 'BEGIN IMMEDIATE');
     try { const result = fn(); this.db.exec('COMMIT'); return result; }
     catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
@@ -131,6 +142,7 @@ export class SqliteStore implements Store {
     return row ? decode(row) : undefined;
   }
   insert(e: Entry): void {
+    if (this.readOnly) fail('READONLY', 'ledger is open read-only; reopen without --readonly to write');
     this.db.prepare('INSERT INTO records(id,type,body,actor,created_at) VALUES(?,?,?,?,?)')
       .run(e.id, e.type, JSON.stringify(e.data), JSON.stringify(e.actor), e.created_at);
     for (const ref of references(e)) this.db.prepare('INSERT INTO links(from_id,to_id,role) VALUES(?,?,?)').run(e.id, ref.id, ref.role);
@@ -174,13 +186,19 @@ export class SqliteStore implements Store {
   }
   receipts(): Receipt[] { return this.db.prepare('SELECT * FROM receipts ORDER BY rowid').all().map(receipt); }
   insertReceipt(r: Receipt): void {
+    if (this.readOnly) fail('READONLY', 'ledger is open read-only; reopen without --readonly to write');
     this.db.prepare('INSERT INTO receipts(request_id,digest,ids) VALUES(?,?,?)').run(r.request_id, r.digest, JSON.stringify(r.ids));
   }
   count(): number { return Number(this.db.prepare('SELECT count(*) AS n FROM records').get()?.n); }
   doctor() {
+    return this.transaction(() => this.check());
+  }
+  private check() {
     const integrity = this.db.prepare('PRAGMA integrity_check').all();
     const foreignKeys = this.db.prepare('PRAGMA foreign_key_check').all();
-    this.db.exec("INSERT INTO lookup(lookup) VALUES('integrity-check')");
+    // The FTS self-check is a special write; readonly skips it and says so.
+    const fts_integrity = this.readOnly ? 'skipped-readonly' as const : 'checked' as const;
+    if (!this.readOnly) this.db.exec("INSERT INTO lookup(lookup) VALUES('integrity-check')");
     const expected = this.db.prepare("SELECT * FROM records WHERE type IN ('claim','source') ORDER BY seq").all().map(decode);
     const actual = this.db.prepare('SELECT id,kind,text FROM lookup').all();
     const index = new Map(actual.map(r => [r.id, r]));
@@ -188,6 +206,6 @@ export class SqliteStore implements Store {
     return { ok: integrity.every(r => r.integrity_check === 'ok') && !foreignKeys.length && consistent,
       schema_version: this.schemaVersion(), sqlite_version: this.db.prepare('SELECT sqlite_version() AS v').get()?.v,
       records: this.count(), foreign_key_errors: foreignKeys, search_index_consistent: consistent,
-      integrity, truth_evaluated: false };
+      fts_integrity, integrity, truth_evaluated: false };
   }
 }

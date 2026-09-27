@@ -51,6 +51,13 @@ Up to 200 records / 1 MiB. `--file -` reads stdin too.
 | doctor | Structural integrity of SQLite/FKs/search index. Not truth adjudication of content |
 
 `--db` works on every command. Other flags work only on the operations shown in `--help`.
+`--readonly` opens an existing file ledger through SQLite read-only access: no creation,
+migration, journal-mode change, or content/receipt/index write. Writes fail with `READONLY`
+before mutation; a schema needing migration fails and names a writable reopen. `init
+--readonly` is rejected. doctor under `--readonly` reports `fts_integrity:
+skipped-readonly` because the FTS self-check is a write; writable doctor reports `checked`.
+Opening a WAL-mode ledger may still create `-shm`/`-wal` sidecars; the guarantee covers
+main-file bytes and WAL content, not the transient shared-memory index.
 search/show limit defaults to 20, max 100. offset is 0–1,000,000. next_offset=null ends that search/connection page.
 Search terms allow up to 500 chars and 16 whitespace-separated terms. FTS OR/NOT and SQL wildcards are not interpreted.
 
@@ -113,8 +120,9 @@ the file is unreadable, as do non-UTF-8 bytes and oversize input. Direct
 capture of a verification against quoteless Evidence fails the same way.
 Verification history rides the normal
 export/restore path losslessly. Schema v2 admits the record type; v1 ledgers
-migrate forward automatically on first open by any command, reads included
-(see architecture).
+migrate forward automatically on first writable open (see architecture).
+A `--readonly` open of a migration-needing ledger fails and names a writable
+reopen instead of migrating.
 
 ## Inspecting one capture
 
@@ -135,9 +143,10 @@ and Review event bodies are immutable; effective states are current at inspectio
 time, not a historical replay. A Review's decision is `entry.data.state`; its target's
 current working state can now differ. No capture-level accepted state is inferred.
 
-The operation writes no records, reviews, receipts, or index data. The existing
-SQLite connection/transaction behavior is unchanged; this is not an OS read-only
-mode. No full-ledger scan is required. Limits are the same as show/search. Past-end
+The operation writes no records, reviews, receipts, or index data. Without
+`--readonly` the SQLite connection still opens writable (migration and journal
+behavior may apply); with `--readonly` the storage guarantee above applies.
+No full-ledger scan is required. Limits are the same as show/search. Past-end
 pages contain an empty items array and null next_offset. Unknown receipts (including
 uncommitted dry-runs) return NOT_FOUND; malformed selectors/page bounds return
 VALIDATION or USAGE. Receipts restored from v1 snapshots remain inspectable;

@@ -139,3 +139,11 @@ and guide: use the default chain (explicit `--db`, else `$YURAI_DB`, else
 `~/.yurai/ledger.sqlite`) without asking and state which ledger is in use;
 ask only to narrow scope or for read-only/no-save tasks. The ban on invented
 non-default paths and the permission/state separation stand unchanged.
+
+## Amendment — read-only opening mode (2026-09-27)
+
+The "not a filesystem read-only mode" sentence above is superseded by ADR
+0006: read-only inspection now opens the store with SQLite read-only access
+(`--readonly` on every call), which refuses creation, migration, journal-mode
+changes, and all content writes. The skill and agent guide carry the rule;
+this ADR's permission/state separation still stands.
