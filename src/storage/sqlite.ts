@@ -15,29 +15,21 @@ const V2_TYPES = `'source','claim','evidence','assessment','relation','review','
 const RECORDS_TRIGGERS = ['UPDATE', 'DELETE'].map(op =>
   `CREATE TRIGGER records_${op.toLowerCase()} BEFORE ${op} ON records BEGIN SELECT RAISE(ABORT, 'immutable ledger'); END;`).join('\n');
 /** v1 -> v2: admit the verification record type. Rebuilds records (SQLite cannot
- *  drop a CHECK), preserving seq so insertion order survives. Foreign keys go
- *  off around one transaction: DROP TABLE under enforced deferred FKs always
- *  fails at commit, while the pragma itself cannot flip inside a transaction.
- *  A crash anywhere leaves user_version 1 with v1 data intact, so reopening
- *  simply retries; reference integrity is checked before and after. */
+ *  drop a CHECK), preserving seq so insertion order survives. Runs inside the
+ *  registry's transaction with foreign keys off (DROP TABLE under enforced
+ *  deferred FKs fails at commit, and the pragma cannot flip inside a
+ *  transaction), so integrity is checked explicitly before and after the
+ *  rebuild; a failure rolls everything back. Steps never touch transactions
+ *  or user_version: the registry commits each step's DDL, checks, and version
+ *  update as one atomic unit. */
 function migrateV1toV2(db: DatabaseSync): void {
   if (foreignKeyCheck(db).length) fail('SCHEMA', 'v1 ledger failed integrity; refusing migration');
-  db.exec('PRAGMA foreign_keys=OFF;');
-  try {
-    db.exec('BEGIN IMMEDIATE');
-    try {
-      db.exec(`${RECORDS_DDL('records_new', V2_TYPES)}
+  db.exec(`${RECORDS_DDL('records_new', V2_TYPES)}
 INSERT INTO records_new(seq,id,type,body,actor,created_at) SELECT seq,id,type,body,actor,created_at FROM records;
 DROP TABLE records;
 ALTER TABLE records_new RENAME TO records;
 CREATE INDEX review_target ON records(json_extract(body, '$.target_id'), seq) WHERE type='review';
-${RECORDS_TRIGGERS}
-PRAGMA user_version = 2;`);
-      db.exec('COMMIT');
-    } catch (error) { db.exec('ROLLBACK'); throw error; }
-  } finally {
-    db.exec('PRAGMA foreign_keys=ON;');
-  }
+${RECORDS_TRIGGERS}`);
   if (foreignKeyCheck(db).length) fail('SCHEMA', 'migration broke references');
 }
 /** Numbered forward migrations. Each step runs once, in order, from the stored
@@ -45,8 +37,14 @@ PRAGMA user_version = 2;`);
 const MIGRATIONS: { from: number; to: number; name: string; run: (db: DatabaseSync) => void }[] = [
   { from: 1, to: 2, name: 'admit verification records', run: migrateV1toV2 },
 ];
-for (let i = 1; i < MIGRATIONS.length; i++)
-  if (MIGRATIONS[i]?.from !== MIGRATIONS[i - 1]?.to) throw new Error('migrations must form a contiguous chain');
+// Static guard for the next migration author: strictly forward, contiguous, from version 1.
+{
+  let expectFrom = 1;
+  for (const m of MIGRATIONS) {
+    if (m.to <= m.from || m.from !== expectFrom) throw new Error('migrations must form a forward chain from version 1');
+    expectFrom = m.to;
+  }
+}
 const CURRENT_SCHEMA = MIGRATIONS[MIGRATIONS.length - 1]?.to ?? 1;
 const migration = `
 ${RECORDS_DDL('records', V2_TYPES)}
@@ -90,23 +88,37 @@ export class SqliteStore implements Store {
     this.db = new DatabaseSync(path);
     try {
       this.db.exec('PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;');
-      let version = Number(this.db.prepare('PRAGMA user_version').get()?.user_version);
+      const version = Number(this.db.prepare('PRAGMA user_version').get()?.user_version);
       const app = Number(this.db.prepare('PRAGMA application_id').get()?.application_id);
       if (version === 0 && app === 0) {
         const tables = Number(this.db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").get()?.n);
         if (!create || tables) fail('SCHEMA', 'Refusing to initialize an unrecognized database');
         this.transaction(() => { this.db.exec(migration); });
       } else if (app !== APPLICATION_ID) fail('SCHEMA', 'Unsupported ledger identity or schema version');
-      else for (;;) {
-        if (version === CURRENT_SCHEMA) break;
-        const next = MIGRATIONS.find(m => m.from === version);
-        if (!next) fail('SCHEMA', 'Unsupported ledger identity or schema version');
-        next.run(this.db);
-        version = Number(this.db.prepare('PRAGMA user_version').get()?.user_version);
-        if (version !== next.to) fail('SCHEMA', `migration ${next.from}->${next.to} did not advance the schema version`);
-      }
+      else if (version !== CURRENT_SCHEMA) this.applyMigrations(version);
       this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;');
     } catch (error) { this.db.close(); throw error; }
+  }
+  private applyMigrations(version: number): void {
+    // Foreign keys stay off around the chain: the pragma cannot flip inside a
+    // transaction, and at least one rebuild needs it off. Steps verify
+    // integrity explicitly with foreign_key_check instead of relying on commit.
+    this.db.exec('PRAGMA foreign_keys=OFF;');
+    try {
+      for (;;) {
+        if (version === CURRENT_SCHEMA) return;
+        const next = MIGRATIONS.find(m => m.from === version);
+        if (!next) fail('SCHEMA', 'Unsupported ledger identity or schema version');
+        this.transaction(() => {
+          next.run(this.db);
+          this.db.exec(`PRAGMA user_version = ${next.to};`);
+          version = Number(this.db.prepare('PRAGMA user_version').get()?.user_version);
+          if (version !== next.to) fail('SCHEMA', `migration ${next.from}->${next.to} did not advance the schema version`);
+        });
+      }
+    } finally {
+      this.db.exec('PRAGMA foreign_keys=ON;');
+    }
   }
   close(): void { this.db.close(); }
   transaction<T>(fn: () => T): T {

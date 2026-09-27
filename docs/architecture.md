@@ -69,14 +69,15 @@ When a relation target is unaccepted or withdrawn, include that state in the res
 The v1 migration is the initial schema only. v2 admits the `verification` record
 type by rebuilding the `records` table (SQLite cannot drop a CHECK), preserving
 `seq` so insertion order survives. Known v1 ledgers migrate automatically on
-open inside one transaction with foreign keys off (DROP TABLE under enforced
-deferred FKs always fails at commit); reference integrity is checked before
-and after, and a crash leaves v1 data with version 1, so reopening retries.
-Unknown or future versions are still refused. Migrations run as a numbered
-chain from the stored version to current; a step that does not advance the
-version is refused. Each migration ships with a frozen old-schema fixture and
-a test proving lossless forward movement, and a frozen current-schema fixture
-guards fresh initialization against drift.
+open. Migrations run as a numbered chain from the stored version to current;
+the registry owns each step's transaction and commits its DDL, integrity
+checks, and version update as one atomic unit, so any failure rolls everything
+back for a retry. Foreign keys stay off around the chain (DROP TABLE under
+enforced deferred FKs fails at commit, and the pragma cannot flip inside a
+transaction); steps verify integrity explicitly instead. Unknown or future
+versions are still refused. Each migration ships with a frozen old-schema
+fixture and a test proving lossless forward movement, and a frozen
+current-schema fixture guards fresh initialization against drift.
 WAL, foreign_keys, busy_timeout, and synchronous=FULL are set.
 
 export reads all records and receipts from one transaction, preserving Review insertion order.

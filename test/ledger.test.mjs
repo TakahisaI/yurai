@@ -642,7 +642,7 @@ test('a database built from the current-schema fixture opens as a current ledger
   assert.equal(store.schemaVersion(), 2);
   assert.equal(store.doctor().ok, true);
 });
-test('failed migration leaves version and data intact for retry', t => {
+test('migration pre-check refuses corrupt v1 and leaves it intact for retry', t => {
   // Refusal happens before any transaction begins; mid-rebuild crash safety
   // rests on the single-transaction rebuild (crash tests arrive in slice 3).
   const dir = mkdtempSync(join(tmpdir(), 'yurai-'));
@@ -672,4 +672,36 @@ test('failed migration leaves version and data intact for retry', t => {
   t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
   assert.equal(store.schemaVersion(), 2);
   assert.deepEqual(store.entries().map(e => e.id), ['src_b', 'evd_b', 'evd_c', 'src_missing']);
+});
+test('migration failure rolls back and a repaired retry succeeds', t => {
+  // A foreign table collides with the rebuild inside its transaction: the
+  // failure must leave the old schema, version, and data durably intact.
+  // Later rebuild statements cannot fail on genuine v1 data (verbatim copy
+  // into a superset schema, then drops/creates on freed names), so this
+  // first-statement collision is the representative in-transaction failure.
+  const dir = mkdtempSync(join(tmpdir(), 'yurai-'));
+  const path = join(dir, 'foreign-v1.sqlite');
+  const seed = new DatabaseSync(path);
+  seed.exec(readFileSync(new URL('./fixtures/v1-schema.sql', import.meta.url), 'utf8'));
+  const at = '2026-09-27T00:00:00.000Z', actor = '{"kind":"human","id":"seed"}';
+  seed.exec(`INSERT INTO records(id,type,body,actor,created_at) VALUES
+    ('src_f','source','{"title":"f","medium":"note","uri":"urn:yurai:synthetic:f"}','${actor}','${at}'),
+    ('evd_f','evidence','{"source_id":"src_f","quote":"qf"}','${actor}','${at}');
+    INSERT INTO links(from_id,to_id,role) VALUES ('evd_f','src_f','source');
+    CREATE TABLE records_new (planted TEXT);`);
+  seed.close();
+  assert.throws(() => new SqliteStore(path));
+  const rolledBack = new DatabaseSync(path);
+  assert.equal(rolledBack.prepare('PRAGMA user_version').get().user_version, 1);
+  assert.equal(rolledBack.prepare('SELECT count(*) AS n FROM records').get().n, 2);
+  assert.equal(rolledBack.prepare("SELECT sql FROM sqlite_master WHERE name='records'").get().sql.includes('verification'), false);
+  assert.equal(rolledBack.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name='records_new'").get().n, 1);
+  rolledBack.close();
+  const repair = new DatabaseSync(path);
+  repair.exec('DROP TABLE records_new;');
+  repair.close();
+  const store = new SqliteStore(path);
+  t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
+  assert.equal(store.schemaVersion(), 2);
+  assert.deepEqual(store.entries().map(e => e.id), ['src_f', 'evd_f']);
 });
