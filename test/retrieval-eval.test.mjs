@@ -73,6 +73,13 @@ test('retrieval eval: exact claim sets and exact routed-path sets', t => {
       if (!item || item.direct_match) missed.push(`routed-only:${id}`);
     }
     if (q.mode === 'expanded' && !q.partial) {
+      for (const item of result.items) {
+        for (const v of item.via ?? []) {
+          if (v.source.entry.id !== v.evidence.entry.data.source_id) {
+            missed.push(`source-mismatch:${v.evidence.entry.id}->${v.source.entry.id}`);
+          }
+        }
+      }
       const actual = actualPaths(result.items);
       const expected = (q.expect_paths ?? []).map(p =>
         tuple(p.claim, p.evidence, p.assessment, p.stance, p.fields ?? [])).sort();
@@ -154,11 +161,12 @@ test('retrieval eval: routed results carry paths, never corroboration counts', t
   t.after(() => store.close());
   const result = ledgerApi.search('38℃', { expand: 'evidence' });
   assert.ok(result.items.length > 1);
-  const banned = ['score', 'rank', 'weight', 'confidence', 'count', 'corroboration', 'support_count'];
   for (const item of result.items) {
-    for (const key of banned) assert.ok(!(key in item), `${item.entry.id} carries ${key}`);
+    assert.deepEqual(Object.keys(item).sort(),
+      ['direct_match', 'entry', 'paths_truncated', 'review', 'state', 'total_paths', 'via', 'warnings']);
     assert.ok(item.via.length > 0);
     for (const v of item.via) {
+      assert.deepEqual(Object.keys(v).sort(), ['assessment', 'evidence', 'match_fields', 'source']);
       for (const side of ['evidence', 'assessment', 'source']) {
         assert.ok(v[side].entry.id);
         assert.ok(['proposed', 'accepted', 'rejected', 'withdrawn'].includes(v[side].state));
