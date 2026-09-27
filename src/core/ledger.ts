@@ -125,7 +125,8 @@ export class Ledger {
       slot.paths.push(...paths);
       merged.set(claim.id, slot);
     }
-    const byRecency = (a: Entry, b: Entry) => b.created_at.localeCompare(a.created_at) || a.id.localeCompare(b.id);
+    // Numeric instant comparison: mixed precisions ('...00Z' vs '...00.500Z') invert under string order.
+    const byRecency = (a: Entry, b: Entry) => Date.parse(b.created_at) - Date.parse(a.created_at) || a.id.localeCompare(b.id);
     const items = [...merged.values()]
       .filter(({ claim }) => includeInactive || live(claim))
       .map(({ claim, direct, paths }) => {

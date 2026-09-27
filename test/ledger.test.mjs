@@ -361,3 +361,20 @@ test('expanded discovery covers rejected states, tiny terms, AND, and edge pagin
   assert.equal(audit.items[0].total_paths, 3);
   assert.equal(audit.items[0].via.find(p => p.assessment.entry.id === 'asm_e2').assessment.state, 'rejected');
 });
+test('expanded discovery orders mixed-precision timestamps by instant, not string', t => {
+  const { ledger } = setup(t);
+  const actor = { kind: 'agent', id: 'test-agent' };
+  const entry = (id, type, data, created_at) => ({ id, type, data, actor, created_at });
+  ledger.importSnapshot({ format: 'yurai.snapshot', version: 1, receipts: [], entries: [
+    entry('src_m', 'source', { title: 'mixed', medium: 'note', uri: 'urn:yurai:synthetic:mixed' }, '2026-09-27T00:00:00Z'),
+    entry('clm_m_old', 'claim', { text: 'older', kind: 'assertion', attributed_to: 'test' }, '2026-09-27T00:00:00Z'),
+    entry('clm_m_new', 'claim', { text: 'newer', kind: 'assertion', attributed_to: 'test' }, '2026-09-27T00:00:00.500Z'),
+    entry('evd_m_old', 'evidence', { source_id: 'src_m', quote: 'MPX older' }, '2026-09-27T00:00:00Z'),
+    entry('evd_m_new', 'evidence', { source_id: 'src_m', quote: 'MPX newer' }, '2026-09-27T00:00:00.500Z'),
+    entry('asm_m_old', 'assessment', { claim_id: 'clm_m_old', evidence_id: 'evd_m_old', stance: 'supports', rationale: 'o' }, '2026-09-27T00:00:00Z'),
+    entry('asm_m_new', 'assessment', { claim_id: 'clm_m_new', evidence_id: 'evd_m_new', stance: 'supports', rationale: 'n' }, '2026-09-27T00:00:00.500Z'),
+    entry('asm_m_new2', 'assessment', { claim_id: 'clm_m_new', evidence_id: 'evd_m_new', stance: 'challenges', rationale: 'c' }, '2026-09-27T00:00:00Z') ] });
+  const found = ledger.search('MPX', { expand: 'evidence' });
+  assert.deepEqual(found.items.map(v => v.entry.id), ['clm_m_new', 'clm_m_old']);
+  assert.deepEqual(found.items[0].via.map(p => p.assessment.entry.id), ['asm_m_new', 'asm_m_new2']);
+});

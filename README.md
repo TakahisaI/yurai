@@ -45,6 +45,7 @@ node dist/cli.js init --db ./demo.sqlite
 node dist/cli.js capture --db ./demo.sqlite --file examples/capture.json --dry-run
 node dist/cli.js capture --db ./demo.sqlite --file examples/capture.json
 node dist/cli.js search '架空' --db ./demo.sqlite
+node dist/cli.js search 'A=80' --expand evidence --db ./demo.sqlite
 node dist/cli.js show clm_demo --db ./demo.sqlite
 node dist/cli.js review clm_demo --db ./demo.sqlite --state accepted --reason '条件付きの記録として残す'
 node dist/cli.js doctor --db ./demo.sqlite
@@ -85,9 +86,11 @@ node dist/cli.js show --db ./demo.sqlite --request-id req_synthetic_demo_v1
 
 This paged view preserves original membership and shows current states/grounds.
 It is not a semantic diff or automatic approval. The [dogfood record](docs/dogfood.md)
-separates reported observations, synthetic regression coverage, and the remaining
-fresh-session handoff needed to close Issue #1. Search still misses Evidence-only
-terms; improving that discovery route is tracked in Issue #4.
+separates reported observations, synthetic regression coverage, and the
+fresh-session handoff that closed Issue #1. Direct search misses Evidence-only
+terms by design; `search QUERY --expand evidence` routes them to Claims through
+their Assessments (see the [contract](docs/contract.md)). Deeper retrieval work
+continues in Issue #4.
 
 ## Backup
 
