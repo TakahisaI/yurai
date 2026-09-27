@@ -529,7 +529,7 @@ test('verification replay survives an advancing clock but still conflicts on cha
     actor: { kind: 'agent', id: 'other-agent' }, request_id: 'req_clock' }), code('CONFLICT'));
 });
 test('v1 ledgers migrate forward with order and data intact', t => {
-  const dir = mkdtempSync(join(tmpdir(), 'yurai-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const dir = mkdtempSync(join(tmpdir(), 'yurai-'));
   const path = join(dir, 'v1.sqlite');
   const v1 = new DatabaseSync(path);
   v1.exec(readFileSync(new URL('./fixtures/v1-schema.sql', import.meta.url), 'utf8'));
@@ -542,7 +542,10 @@ test('v1 ledgers migrate forward with order and data intact', t => {
     INSERT INTO lookup(id,kind,text) VALUES ('src_v1','source','v1 source\nurn:yurai:synthetic:v1'),('clm_v1','claim','v1 claim');
     INSERT INTO receipts(request_id,digest,ids) VALUES ('req_v1seed','0','["src_v1","clm_v1","evd_v1"]');`);
   v1.close();
-  const store = new SqliteStore(path); t.after(() => store.close());
+  const store = new SqliteStore(path);
+  // One hook with explicit order: after-hooks run FIFO, and Windows refuses to
+  // remove the directory while the database file is still open.
+  t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
   assert.equal(store.schemaVersion(), 2);
   const ledger = new Ledger(store, () => at);
   assert.deepEqual(store.entries().map(e => e.id), ['src_v1', 'clm_v1', 'evd_v1']);
