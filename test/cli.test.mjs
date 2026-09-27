@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { DatabaseSync } from 'node:sqlite';
 const cli = new URL('../dist/cli.js', import.meta.url);
 function setup(t) {
   const dir = mkdtempSync(join(tmpdir(), 'yurai-cli-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -187,4 +188,18 @@ test('CLI refuses to import snapshots over 16 MiB and leaves the target empty', 
   const snapshot = JSON.parse(run(['export']).stdout);
   assert.deepEqual(snapshot.entries, []);
   assert.deepEqual(snapshot.receipts, []);
+});
+test('CLI refuses oversized import before migrating an old target', t => {
+  const { dir, db, run } = setup(t);
+  const seed = new DatabaseSync(db);
+  seed.exec(readFileSync(new URL('./fixtures/v1-schema.sql', import.meta.url), 'utf8'));
+  seed.close();
+  const huge = join(dir, 'huge.json');
+  writeFileSync(huge, Buffer.alloc(16 * 1024 * 1024 + 1, 120));
+  const out = run(['import', '--file', huge]);
+  assert.equal(out.status, 2);
+  assert.equal(out.stdout, '');
+  const check = new DatabaseSync(db);
+  assert.equal(check.prepare('PRAGMA user_version').get().user_version, 1);
+  check.close();
 });

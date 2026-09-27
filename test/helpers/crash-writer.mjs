@@ -1,21 +1,28 @@
-// Crash mid-write, then let the parent verify. Usage: node crash-writer.mjs DB MODE
-// partial: stage record, link, lookup, and receipt rows and die before COMMIT.
-// committed: COMMIT the same rows, then die. Prints 'ready' once the outcome
-// is decided; the parent awaits process exit before asserting.
-import { DatabaseSync } from 'node:sqlite';
+// Crash a REAL Ledger.capture() after its final staged write but before COMMIT.
+// Usage: node crash-writer.mjs DB MODE
+// partial: SIGKILL inside the capture transaction; committed: SIGKILL after it.
+// Prints 'staged' from the patched receipt write, then the outcome marker.
+// Anything else (e.g. 'unexpected-commit') means the harness misfired.
+import { writeSync } from 'node:fs';
+import { Ledger, SqliteStore } from '../../dist/index.js';
 const [, , dbPath, mode] = process.argv;
-const db = new DatabaseSync(dbPath);
-db.exec('PRAGMA foreign_keys=ON;');
-db.exec('BEGIN IMMEDIATE');
-db.exec(`INSERT INTO records(id,type,body,actor,created_at) VALUES
-  ('src_crash','source','{"title":"crash token source crashtoken","medium":"note","uri":"urn:yurai:synthetic:crash"}',
-   '{"kind":"agent","id":"crash"}','2026-09-27T00:00:00.000Z'),
-  ('evd_crash','evidence','{"source_id":"src_crash","quote":"qf"}',
-   '{"kind":"agent","id":"crash"}','2026-09-27T00:00:00.000Z');
-  INSERT INTO links(from_id,to_id,role) VALUES ('evd_crash','src_crash','source');
-  INSERT INTO lookup(id,kind,text) VALUES ('src_crash','source',
-   'crash token source crashtoken' || char(10) || 'urn:yurai:synthetic:crash');
-  INSERT INTO receipts(request_id,digest,ids) VALUES
-  ('req_crash','${'f'.repeat(64)}','["src_crash","evd_crash"]');`);
-if (mode === 'committed') db.exec('COMMIT');
-process.stdout.write('ready\n', () => process.kill(process.pid, 'SIGKILL'));
+const store = new SqliteStore(dbPath);
+const ledger = new Ledger(store, () => '2026-09-27T00:00:00.000Z');
+const bundle = { version: 1, request_id: 'req_crash_cap', actor: { kind: 'agent', id: 'crash' }, entries: [
+  { id: 'src_cap', type: 'source',
+    data: { title: 'crashcap token source', medium: 'note', uri: 'urn:yurai:synthetic:crashcap' } },
+  { id: 'clm_cap', type: 'claim',
+    data: { text: 'crash capture finding', kind: 'assertion', attributed_to: 'crash' } },
+  { id: 'evd_cap', type: 'evidence', data: { source_id: 'src_cap', quote: 'qf' } },
+  { id: 'asm_cap', type: 'assessment',
+    data: { claim_id: 'clm_cap', evidence_id: 'evd_cap', stance: 'reports', rationale: 'r' } }] };
+const insertReceipt = store.insertReceipt.bind(store);
+store.insertReceipt = r => {
+  insertReceipt(r);
+  writeSync(1, 'staged\n');
+  if (mode === 'partial') process.kill(process.pid, 'SIGKILL');
+};
+ledger.capture(bundle);
+if (mode === 'partial') { writeSync(1, 'unexpected-commit\n'); process.exit(1); }
+writeSync(1, 'committed\n');
+process.kill(process.pid, 'SIGKILL');
