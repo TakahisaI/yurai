@@ -143,9 +143,10 @@ and Review event bodies are immutable; effective states are current at inspectio
 time, not a historical replay. A Review's decision is `entry.data.state`; its target's
 current working state can now differ. No capture-level accepted state is inferred.
 
-The operation writes no records, reviews, receipts, or index data. The existing
-SQLite connection/transaction behavior is unchanged; this is not an OS read-only
-mode. No full-ledger scan is required. Limits are the same as show/search. Past-end
+The operation writes no records, reviews, receipts, or index data. Without
+`--readonly` the SQLite connection still opens writable (migration and journal
+behavior may apply); with `--readonly` the storage guarantee above applies.
+No full-ledger scan is required. Limits are the same as show/search. Past-end
 pages contain an empty items array and null next_offset. Unknown receipts (including
 uncommitted dry-runs) return NOT_FOUND; malformed selectors/page bounds return
 VALIDATION or USAGE. Receipts restored from v1 snapshots remain inspectable;
