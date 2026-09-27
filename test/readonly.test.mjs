@@ -70,13 +70,14 @@ test('readonly open refuses migration and leaves v1 bytes intact', t => {
   const v1 = new DatabaseSync(path);
   v1.exec(readFileSync(new URL('./fixtures/v1-schema.sql', import.meta.url), 'utf8'));
   v1.close();
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
   const before = readFileSync(path);
   assert.throws(() => new SqliteStore(path, false, { readonly: true }), e =>
     e instanceof LedgerError && e.code === 'SCHEMA' && /needs migration/.test(e.message));
   assert.deepEqual(readFileSync(path), before);
   const writable = new SqliteStore(path);
-  t.after(() => writable.close());
+  // One hook with explicit order: Windows refuses to remove the directory
+  // while the database file is still open.
+  t.after(() => { writable.close(); rmSync(dir, { recursive: true, force: true }); });
   assert.equal(writable.schemaVersion(), 2);
 });
 
