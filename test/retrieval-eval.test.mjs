@@ -13,23 +13,21 @@ function setup() {
   return { store, ledgerApi };
 }
 
-function checkPaths(item, expected, missed) {
-  for (const p of expected) {
-    const via = (item?.via ?? []).find(v =>
-      v.evidence.entry.id === p.evidence && v.assessment.entry.id === p.assessment);
-    if (!via) { missed.push(`path ${p.claim}/${p.evidence}/${p.assessment}: absent`); continue; }
-    if (via.assessment.entry.data.stance !== p.stance) {
-      missed.push(`path ${p.claim}/${p.evidence}/${p.assessment}: stance is ${via.assessment.entry.data.stance}`);
-    }
-    for (const field of p.fields ?? []) {
-      if (!via.match_fields.includes(field)) {
-        missed.push(`path ${p.claim}/${p.evidence}/${p.assessment}: missing field ${field}`);
-      }
+const tuple = (claim, evidence, assessment, stance, fields) =>
+  [claim, evidence, assessment, stance, [...fields].sort().join('+')].join('|');
+
+function actualPaths(items) {
+  const out = [];
+  for (const item of items) {
+    for (const v of item.via ?? []) {
+      out.push(tuple(item.entry.id, v.evidence.entry.id, v.assessment.entry.id,
+        v.assessment.entry.data.stance, v.match_fields));
     }
   }
+  return out.sort();
 }
 
-test('retrieval eval: expected claims, paths, stances, and fields', t => {
+test('retrieval eval: exact claim sets and exact routed-path sets', t => {
   const { store, ledgerApi } = setup();
   t.after(() => store.close());
   const failures = [];
@@ -50,11 +48,20 @@ test('retrieval eval: expected claims, paths, stances, and fields', t => {
     const missed = [];
     const unexpected = [];
     if (q.mode === 'expanded') expansionPaths += result.items.reduce((n, i) => n + (i.total_paths ?? 0), 0);
-    for (const id of q.expect_any ?? []) {
-      if (!retrieved.includes(id)) missed.push(id);
-    }
-    for (const id of q.expect_none ?? []) {
-      if (retrieved.includes(id)) unexpected.push(id);
+    if (q.partial) {
+      const allowed = new Set(q.expect_subset_of ?? []);
+      for (const id of retrieved) {
+        if (!allowed.has(id)) unexpected.push(id);
+      }
+      if (result.items.length !== (q.limit ?? 50)) missed.push(`page size ${result.items.length}`);
+    } else {
+      const expected = new Set(q.expect_ids ?? []);
+      for (const id of expected) {
+        if (!retrieved.includes(id)) missed.push(id);
+      }
+      for (const id of retrieved) {
+        if (!expected.has(id)) unexpected.push(id);
+      }
     }
     for (const id of q.expect_direct ?? []) {
       if (!byId.get(id)?.direct_match) missed.push(`direct:${id}`);
@@ -63,15 +70,25 @@ test('retrieval eval: expected claims, paths, stances, and fields', t => {
       const item = byId.get(id);
       if (!item || item.direct_match) missed.push(`routed-only:${id}`);
     }
-    for (const p of q.expect_paths ?? []) {
-      checkPaths(byId.get(p.claim), [p], missed);
+    if (q.mode === 'expanded' && !q.partial) {
+      const actual = actualPaths(result.items);
+      const expected = (q.expect_paths ?? []).map(p =>
+        tuple(p.claim, p.evidence, p.assessment, p.stance, p.fields ?? [])).sort();
+      for (const p of expected) {
+        if (!actual.includes(p)) missed.push(`path:${p}`);
+      }
+      for (const p of actual) {
+        if (!expected.includes(p)) unexpected.push(`path:${p}`);
+      }
+      detail.push({ id: q.id, query: q.query, retrieved, paths: actual, missed, unexpected, elapsed_ms: caseMs });
+    } else {
+      detail.push({ id: q.id, query: q.query, retrieved, missed, unexpected, elapsed_ms: caseMs });
     }
     if (q.expect_next_offset !== undefined) {
       const hasMore = result.next_offset !== null && result.next_offset !== undefined;
       if (hasMore !== q.expect_next_offset) missed.push(`next_offset:${result.next_offset}`);
     }
     for (const m of [...missed, ...unexpected.map(u => `unexpected:${u}`)]) failures.push(`${q.id}: ${m}`);
-    detail.push({ id: q.id, query: q.query, retrieved, missed, unexpected, elapsed_ms: caseMs });
   }
   const snapshotBytes = Buffer.byteLength(JSON.stringify(ledgerApi.exportSnapshot()), 'utf8');
   console.log(JSON.stringify({
