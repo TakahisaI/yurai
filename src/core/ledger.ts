@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { fail, normalize, pageBounds, parseBundle, parseSnapshot, references } from './model.js';
-import type { Entry, Input, Snapshot, State } from './model.js';
+import { fail, matchedEvidenceFields, normalize, pageBounds, parseBundle, parseSnapshot, references } from './model.js';
+import type { Entry, EvidenceField, Input, Snapshot, State } from './model.js';
 import type { Store } from './ports.js';
 
 function canonical(value: unknown): string {
@@ -74,18 +74,73 @@ export class Ledger {
     if (entry.type === 'claim' && entry.data.attributed_to === 'unknown') warnings.push('unknown_attribution');
     return { entry, state, review: review ?? null, warnings };
   }
-  search(query: string, options: { kind?: 'claim' | 'source'; limit?: number; offset?: number; includeInactive?: boolean } = {}) {
-    const { kind = 'claim', limit = 20, offset = 0, includeInactive = false } = options;
+  search(query: string, options: { kind?: 'claim' | 'source'; limit?: number; offset?: number; includeInactive?: boolean; expand?: 'evidence' } = {}) {
+    const { kind = 'claim', limit = 20, offset = 0, includeInactive = false, expand } = options;
     pageBounds(limit, offset);
     if (kind !== 'claim' && kind !== 'source') fail('VALIDATION', 'search kind must be claim or source');
+    if (expand !== undefined && expand !== 'evidence') fail('VALIDATION', 'expand must be evidence');
+    if (expand && kind !== 'claim') fail('VALIDATION', 'expanded discovery routes to claims only');
     if (typeof query !== 'string' || query.length > 500 || query.includes('\u0000')) fail('VALIDATION', 'invalid query');
     const tokens = normalize(query).trim().split(/\s+/u).filter(Boolean);
     if (!tokens.length || tokens.length > 16) fail('VALIDATION', 'query needs 1..16 literal terms');
     return this.store.transaction(() => {
+      if (expand) return this.expanded(tokens, includeInactive, limit, offset, query);
       const rows = this.store.search(kind, tokens, includeInactive, limit + 1, offset);
       return { items: rows.slice(0, limit).map(e => this.view(e)), next_offset: rows.length > limit ? offset + limit : null,
         query, match: 'literal_terms_and', truth_evaluated: false };
     });
+  }
+  private expanded(tokens: string[], includeInactive: boolean, limit: number, offset: number, query: string) {
+    // Exhaust small result sets, then page the union once: paging the evidence
+    // scan or the direct matches first would silently drop routed claims.
+    const direct: Entry[] = [];
+    for (let off = 0; ; off += 100) {
+      const page = this.store.search('claim', tokens, includeInactive, 101, off);
+      direct.push(...page.slice(0, 100));
+      if (page.length <= 100) break;
+    }
+    type Path = { evidence: Entry; assessment: Entry; source: Entry; match_fields: EvidenceField[] };
+    const routed = new Map<string, { claim: Entry; paths: Path[] }>();
+    for (const evidence of this.store.entries()) {
+      if (evidence.type !== 'evidence') continue;
+      const match_fields = matchedEvidenceFields(evidence.data, tokens);
+      if (!match_fields.length) continue;
+      for (let off = 0; ; off += 100) {
+        const page = this.store.incoming(evidence.id, 101, off);
+        for (const assessment of page.slice(0, 100)) {
+          if (assessment.type !== 'assessment') continue;
+          const claim = this.required(assessment.data.claim_id);
+          const slot = routed.get(claim.id) ?? { claim, paths: [] as Path[] };
+          slot.paths.push({ evidence, assessment, source: this.required(evidence.data.source_id), match_fields });
+          routed.set(claim.id, slot);
+        }
+        if (page.length <= 100) break;
+      }
+    }
+    const live = (entry: Entry) => { const s = this.view(entry).state; return s !== 'rejected' && s !== 'withdrawn'; };
+    const merged = new Map<string, { claim: Entry; direct: boolean; paths: Path[] }>();
+    for (const claim of direct) merged.set(claim.id, { claim, direct: true, paths: [] });
+    for (const { claim, paths } of routed.values()) {
+      const slot = merged.get(claim.id) ?? { claim, direct: false, paths: [] as Path[] };
+      slot.paths.push(...paths);
+      merged.set(claim.id, slot);
+    }
+    const byRecency = (a: Entry, b: Entry) => b.created_at.localeCompare(a.created_at) || a.id.localeCompare(b.id);
+    const items = [...merged.values()]
+      .filter(({ claim }) => includeInactive || live(claim))
+      .map(({ claim, direct, paths }) => {
+        const kept = (includeInactive ? paths : paths.filter(p => live(p.evidence) && live(p.assessment) && live(p.source)))
+          .sort((a, b) => byRecency(a.assessment, b.assessment) || a.evidence.id.localeCompare(b.evidence.id));
+        return { ...this.view(claim), direct_match: direct,
+          via: kept.slice(0, limit).map(p => ({ evidence: this.view(p.evidence), assessment: this.view(p.assessment),
+            source: this.view(p.source), match_fields: p.match_fields })),
+          total_paths: kept.length, paths_truncated: kept.length > limit };
+      })
+      .filter(item => includeInactive || item.direct_match || item.total_paths > 0)
+      .sort((a, b) => byRecency(a.entry, b.entry));
+    const page = items.slice(offset, offset + limit + 1);
+    return { items: page.slice(0, limit), next_offset: page.length > limit ? offset + limit : null,
+      query, match: 'expanded_evidence_routed', truth_evaluated: false };
   }
   private resolve(entry: Entry) {
     const refs = references(entry).map(r => this.required(r.id));

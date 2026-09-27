@@ -58,6 +58,7 @@ Terms of 3+ characters use trigrams; 1–2 character terms use substring search 
 Handles "出生率", "出生", and "AI" alike. No morphological analysis or semantic search.
 
 Search defaults to Claims. rejected/withdrawn stay out of default search but remain via ID lookup and include-inactive.
+Expanded discovery (`--expand evidence`) additionally scans Evidence quotes and paraphrases per query and routes strict Evidence→Assessment→Claim paths to union with direct matches. The scan needs no index or schema migration, which is why `user_version` stays 1; it suits small ledgers only and never verifies quotations.
 show expands direct connections and the needed Evidence→Source hops. It never traverses the graph unboundedly.
 When a relation target is unaccepted or withdrawn, include that state in the response. Never describe missing-page counterevidence as "nonexistent."
 

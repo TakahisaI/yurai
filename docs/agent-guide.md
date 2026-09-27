@@ -35,8 +35,10 @@ The commands assume `YURAI_DB` already contains the designated path. Shell synta
 is illustrative; pass the same explicit path in the host's own execution API.
 Search terms are literal AND, not semantic/Boolean search. Only Claim text/scope/why
 or Source title/uri/identifiers are indexed. A term found only in an Evidence quote
-can be missed. Try a small number of meaningful reformulations or a known Source,
-then disclose the limit; do not scan/dump the entire private ledger by default.
+or paraphrase needs `search 'term' --expand evidence`, which routes strict
+Evidence→Assessment→Claim paths to the unioned result with match provenance.
+Try a small number of meaningful reformulations or a known Source, then disclose
+the limit; do not scan/dump the entire private ledger by default.
 Do not stuff unrelated aliases into scope/why as a permanent search workaround.
 
 Inspect applicable scope, attribution, Assessment stance, and contrary grounds.
@@ -171,6 +173,7 @@ node dist/cli.js doctor --db ./demo.sqlite
 The first bundle deliberately includes an overgeneralization, positive and doubting
 material, a user hypothesis, and a distinct agent inference. The second corrects
 that overgeneralization while preserving both reported conditions and the old
-record. `ZKQ` appears only in Evidence: current search misses it. Issue #4 tracks
-a proper retrieval route, not a demand that the writer anticipate future queries.
+record. `ZKQ` appears only in Evidence: direct search misses it by contract, while
+`search 'ZKQ' --expand evidence` routes it to Claims with match provenance.
+No writer-side alias stuffing is needed.
 The tests exercise storage/CLI behavior, not agent autonomy or real-world success.

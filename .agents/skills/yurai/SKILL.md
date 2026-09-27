@@ -29,7 +29,8 @@ This skill contains usage mechanics, not prior findings or a research plan.
 
 - Read relevant Claims and their grounds. Search is literal AND over Claim
   text/scope/why, or Source title/uri/identifiers with `--kind source`.
-  Evidence-only words and synonyms can be missed; zero hits prove no absence.
+  Evidence-only words need `--expand evidence` to route through grounds; synonyms
+  can still be missed. Zero hits prove no absence.
   Follow necessary `show` pages, including contrary material and inactive grounds.
 - A saved or accepted assertion is not established evidence. Verify externally
   when the task needs it (including insufficient, contested, or outdated grounds),

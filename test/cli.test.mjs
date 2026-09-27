@@ -81,3 +81,23 @@ test('CLI rejects ambiguous capture selectors before opening a DB', t => {
   assert.equal(run(['show','--request-id','']).status, 2);
   assert.equal(run(['show','--request-id','req_missing','--limit','101']).status, 2);
 });
+test('CLI expands Evidence-only terms to Claims end to end', t => {
+  const { run } = setup(t);
+  run(['init']);
+  run(['capture','--file','examples/dogfood/01-capture.json']);
+  run(['capture','--file','examples/dogfood/02-correct.json']);
+  assert.equal(JSON.parse(run(['search','ZKQ']).stdout).items.length, 0);
+  const found = JSON.parse(run(['search','ZKQ','--expand','evidence']).stdout);
+  assert.equal(found.match, 'expanded_evidence_routed');
+  assert.deepEqual(found.items.map(v => v.entry.id), ['clm_fixture_corrected', 'clm_fixture_user']);
+  assert.equal(found.items[0].via[0].evidence.entry.id, 'evd_fixture_x');
+  assert.equal(found.items[0].via[0].assessment.entry.data.stance, 'reports');
+  assert.equal(JSON.parse(run(['doctor']).stdout).ok, true);
+});
+test('CLI rejects bad expanded-search usage', t => {
+  const { run } = setup(t);
+  assert.equal(run(['show','clm_demo','--expand','evidence']).status, 2);
+  run(['init']);
+  assert.equal(run(['search','ZKQ','--expand','bogus']).status, 2);
+  assert.equal(run(['search','ZKQ','--kind','source','--expand','evidence']).status, 2);
+});

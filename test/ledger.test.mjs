@@ -233,7 +233,7 @@ test('synthetic dogfood preserves attribution, disagreement, correction and curr
   assert.equal(ledger.search('架空').items.some(v => v.entry.id === old.entry.id), false);
   assert.equal(ledger.search('架空', { includeInactive: true }).items.some(v => v.entry.id === old.entry.id), true);
   assert.ok(old.connections.some(v => v.entry.type === 'relation' && v.entry.data.relation === 'supersedes'));
-  // Characterizes the current gap, not the desired behavior. Replace this assertion in Issue #4.
+  // Direct search still misses Evidence-only terms by contract; expanded discovery covers them.
   assert.equal(ledger.search('ZKQ').items.length, 0);
   assert.match(ledger.show('evd_fixture_x').entry.data.quote, /ZKQ/);
   ledger.capture(bundle([{ id: 'rev_fixture_keep', type: 'review', data: {
@@ -242,4 +242,122 @@ test('synthetic dogfood preserves attribution, disagreement, correction and curr
   assert.equal(inspected.items.find(v => v.entry.id === 'clm_fixture_corrected').state, 'accepted');
   const anchor = inspected.items.find(v => v.entry.id === 'asm_fixture_corrected_x').references.find(v => v.entry.type === 'evidence');
   assert.equal(anchor.state, 'proposed'); assert.ok(anchor.warnings.includes('anchor_not_verified'));
+});
+test('expanded discovery routes Evidence-only terms to Claims with match provenance', t => {
+  const { ledger } = setup(t); ledger.capture(dogfood('01-capture.json'));
+  const found = ledger.search('ZKQ', { expand: 'evidence' });
+  assert.equal(found.match, 'expanded_evidence_routed'); assert.equal(found.truth_evaluated, false);
+  assert.deepEqual(found.items.map(v => v.entry.id), ['clm_fixture_old', 'clm_fixture_user']);
+  for (const item of found.items) {
+    assert.equal(item.direct_match, false); assert.equal(item.total_paths, 1); assert.equal(item.paths_truncated, false);
+    assert.deepEqual(item.via[0].match_fields, ['quote']);
+    assert.equal(item.via[0].evidence.entry.id, 'evd_fixture_x');
+    assert.equal(item.via[0].source.entry.id, 'src_fixture');
+    assert.ok(item.via[0].evidence.warnings.includes('anchor_not_verified'));
+  }
+  assert.equal(found.items[0].via[0].assessment.entry.data.stance, 'supports');
+  assert.equal(found.items[1].via[0].assessment.entry.data.stance, 'context');
+  assert.ok(found.items[1].via[0].assessment.entry.data.rationale);
+});
+test('expanded discovery unions direct and routed matches without source fanout', t => {
+  const { ledger } = setup(t); ledger.capture(dogfood('01-capture.json'));
+  const found = ledger.search('架空', { expand: 'evidence' });
+  assert.deepEqual(found.items.map(v => v.entry.id), ['clm_fixture_agent', 'clm_fixture_old', 'clm_fixture_user']);
+  assert.ok(found.items.every(v => v.direct_match));
+  const old = found.items.find(v => v.entry.id === 'clm_fixture_old');
+  assert.equal(old.total_paths, 2); assert.equal(old.paths_truncated, false);
+  assert.deepEqual(new Set(old.via.map(p => p.assessment.entry.data.stance)), new Set(['supports', 'challenges']));
+  const agent = found.items.find(v => v.entry.id === 'clm_fixture_agent');
+  assert.equal(agent.total_paths, 0); assert.deepEqual(agent.via, []);
+  assert.equal(ledger.search('ZKQ', { expand: 'evidence' }).items.some(v => v.entry.id === 'clm_fixture_agent'), false);
+});
+test('expanded discovery respects withdrawal without resurrecting it', t => {
+  const { ledger } = setup(t);
+  ledger.capture(dogfood('01-capture.json')); ledger.capture(dogfood('02-correct.json'));
+  const found = ledger.search('ZKQ', { expand: 'evidence' });
+  assert.deepEqual(found.items.map(v => v.entry.id), ['clm_fixture_corrected', 'clm_fixture_user']);
+  assert.equal(found.items[0].via[0].assessment.entry.data.stance, 'reports');
+  const audit = ledger.search('ZKQ', { expand: 'evidence', includeInactive: true });
+  const old = audit.items.find(v => v.entry.id === 'clm_fixture_old');
+  assert.equal(old.state, 'withdrawn');
+  assert.equal(old.review.data.rationale, 'The universal wording exceeded the attached evidence.');
+});
+test('expanded discovery drops inactive path members by default, keeps them for audit', t => {
+  for (const [target, remaining] of [['asm_fixture_support', ['clm_fixture_user']], ['evd_fixture_x', []], ['src_fixture', []]]) {
+    const { ledger } = setup(t); ledger.capture(dogfood('01-capture.json'));
+    ledger.capture(bundle([{ id: `rev_drop_${target}`, type: 'review',
+      data: { target_id: target, state: 'withdrawn', rationale: 'drop this path' } }], `req_drop_${target}`));
+    const found = ledger.search('ZKQ', { expand: 'evidence' });
+    assert.deepEqual(found.items.map(v => v.entry.id), remaining, target);
+    const audit = ledger.search('ZKQ', { expand: 'evidence', includeInactive: true });
+    assert.ok(audit.items.length > remaining.length, target);
+    const marked = audit.items.flatMap(v => v.via).find(p =>
+      [p.evidence.entry.id, p.assessment.entry.id, p.source.entry.id].includes(target));
+    assert.ok(marked, target);
+  }
+});
+test('expanded discovery keeps opposing stances, pages paths and claims, and survives restore', t => {
+  const { ledger } = setup(t);
+  const entries = [
+    { id: 'src_r', type: 'source', data: { title: 'synthetic retrieval', medium: 'note', uri: 'urn:yurai:synthetic:r' } },
+    { id: 'clm_r', type: 'claim', data: { text: 'routed only', kind: 'assertion', attributed_to: 'test' } },
+    { id: 'clm_r2', type: 'claim', data: { text: 'second route', kind: 'assertion', attributed_to: 'test' } }];
+  for (const [suffix, text] of [['a', 'QWQ alpha'], ['b', 'QWQ beta'], ['c', 'QWQ gamma']])
+    entries.push({ id: `evd_r${suffix}`, type: 'evidence', data: { source_id: 'src_r', quote: text } });
+  entries.push(
+    { id: 'asm_ra', type: 'assessment', data: { claim_id: 'clm_r', evidence_id: 'evd_ra', stance: 'supports', rationale: 'for' } },
+    { id: 'asm_rb', type: 'assessment', data: { claim_id: 'clm_r', evidence_id: 'evd_rb', stance: 'challenges', rationale: 'against' } },
+    { id: 'asm_rc', type: 'assessment', data: { claim_id: 'clm_r2', evidence_id: 'evd_rc', stance: 'context', rationale: 'nearby' } });
+  ledger.capture(bundle(entries, 'req_r_expanded'));
+  const both = ledger.search('QWQ', { expand: 'evidence' });
+  assert.deepEqual(both.items.map(v => v.entry.id), ['clm_r', 'clm_r2']);
+  assert.deepEqual(new Set(both.items[0].via.map(p => p.assessment.entry.data.stance)), new Set(['supports', 'challenges']));
+  const one = ledger.search('QWQ', { expand: 'evidence', limit: 1 });
+  assert.equal(one.items.length, 1); assert.equal(one.next_offset, 1);
+  assert.equal(one.items[0].total_paths, 2); assert.equal(one.items[0].paths_truncated, true);
+  assert.equal(ledger.search('QWQ', { expand: 'evidence', limit: 1, offset: 1 }).items[0].entry.id, 'clm_r2');
+  const other = setup(t);
+  other.ledger.importSnapshot(ledger.exportSnapshot());
+  assert.deepEqual(other.ledger.search('QWQ', { expand: 'evidence' }).items.map(v => v.entry.id), ['clm_r', 'clm_r2']);
+});
+test('expanded discovery matches short terms, NFKC, and punctuation; locators stay out', t => {
+  const { ledger } = setup(t); ledger.capture(dogfood('01-capture.json'));
+  assert.ok(ledger.search('ＺＫＱ', { expand: 'evidence' }).items.length > 0);
+  assert.ok(ledger.search('Xで', { expand: 'evidence' }).items.some(v => v.entry.id === 'clm_fixture_user'));
+  assert.ok(ledger.search('A=80', { expand: 'evidence' }).items.some(v => v.entry.id === 'clm_fixture_old'));
+  ledger.capture(bundle([
+    { id: 'src_loc', type: 'source', data: { title: 'locator only', medium: 'note', uri: 'urn:yurai:synthetic:loc' } },
+    { id: 'evd_loc', type: 'evidence', data: { source_id: 'src_loc', locator: 'shelf LOC8X' } },
+    { id: 'clm_loc', type: 'claim', data: { text: 'nothing lexical here', kind: 'assertion', attributed_to: 'test' } },
+    { id: 'asm_loc', type: 'assessment', data: { claim_id: 'clm_loc', evidence_id: 'evd_loc', stance: 'context', rationale: 'pointer only' } }], 'req_loc'));
+  assert.equal(ledger.search('LOC8X', { expand: 'evidence' }).items.length, 0);
+  assert.throws(() => ledger.search('ZKQ', { kind: 'source', expand: 'evidence' }), code('VALIDATION'));
+});
+test('expanded discovery covers rejected states, tiny terms, AND, and edge pagination', t => {
+  const { ledger } = setup(t);
+  ledger.capture(bundle([
+    { id: 'src_e', type: 'source', data: { title: 'edge', medium: 'note', uri: 'urn:yurai:synthetic:edge' } },
+    { id: 'clm_e', type: 'claim', data: { text: 'edge host', kind: 'assertion', attributed_to: 'test' } },
+    { id: 'evd_e1', type: 'evidence', data: { source_id: 'src_e', quote: 'QZX alpha one' } },
+    { id: 'evd_e2', type: 'evidence', data: { source_id: 'src_e', quote: 'QZX beta two' } },
+    { id: 'asm_e1', type: 'assessment', data: { claim_id: 'clm_e', evidence_id: 'evd_e1', stance: 'supports', rationale: 'for' } },
+    { id: 'asm_e2', type: 'assessment', data: { claim_id: 'clm_e', evidence_id: 'evd_e1', stance: 'challenges', rationale: 'against' } },
+    { id: 'asm_e3', type: 'assessment', data: { claim_id: 'clm_e', evidence_id: 'evd_e2', stance: 'context', rationale: 'nearby' } }], 'req_edge'));
+  const found = ledger.search('QZX', { expand: 'evidence' });
+  assert.equal(found.items.length, 1); assert.equal(found.items[0].total_paths, 3);
+  assert.deepEqual(new Set(found.items[0].via.map(p => p.assessment.entry.data.stance)), new Set(['supports', 'challenges', 'context']));
+  assert.equal(found.items[0].via[0].assessment.entry.actor.id, 'test-agent');
+  assert.equal(ledger.search('QZX alpha', { expand: 'evidence' }).items.length, 1);
+  assert.equal(ledger.search('QZX gamma', { expand: 'evidence' }).items.length, 0);
+  assert.equal(ledger.search('Q', { expand: 'evidence' }).items.length, 1);
+  const past = ledger.search('QZX', { expand: 'evidence', offset: 5 });
+  assert.equal(past.items.length, 0); assert.equal(past.next_offset, null);
+  ledger.capture(bundle([{ id: 'rev_rej', type: 'review',
+    data: { target_id: 'asm_e2', state: 'rejected', rationale: 'bad reading' } }], 'req_rej'));
+  const dropped = ledger.search('QZX', { expand: 'evidence' });
+  assert.equal(dropped.items[0].total_paths, 2);
+  assert.ok(dropped.items[0].via.every(p => p.assessment.entry.id !== 'asm_e2'));
+  const audit = ledger.search('QZX', { expand: 'evidence', includeInactive: true });
+  assert.equal(audit.items[0].total_paths, 3);
+  assert.equal(audit.items[0].via.find(p => p.assessment.entry.id === 'asm_e2').assessment.state, 'rejected');
 });
