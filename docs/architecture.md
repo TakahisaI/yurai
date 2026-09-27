@@ -59,7 +59,7 @@ Terms of 3+ characters use trigrams; 1–2 character terms use substring search 
 Handles "出生率", "出生", and "AI" alike. No morphological analysis or semantic search.
 
 Search defaults to Claims. rejected/withdrawn stay out of default search but remain via ID lookup and include-inactive.
-Expanded discovery (`--expand evidence`) additionally scans Evidence quotes and paraphrases per query and routes strict Evidence→Assessment→Claim paths to union with direct matches. The scan needs no index or schema migration, which is why `user_version` stays 1; it suits small ledgers only and never verifies quotations.
+Expanded discovery (`--expand evidence`) additionally scans Evidence quotes and paraphrases per query and routes strict Evidence→Assessment→Claim paths to union with direct matches. The scan needs no index or schema migration; it suits small ledgers only and never verifies quotations.
 show expands direct connections and the needed Evidence→Source hops. It never traverses the graph unboundedly.
 When a relation target is unaccepted or withdrawn, include that state in the response. Never describe missing-page counterevidence as "nonexistent."
 
@@ -72,8 +72,11 @@ type by rebuilding the `records` table (SQLite cannot drop a CHECK), preserving
 open inside one transaction with foreign keys off (DROP TABLE under enforced
 deferred FKs always fails at commit); reference integrity is checked before
 and after, and a crash leaves v1 data with version 1, so reopening retries.
-Unknown or future versions are still refused. Each migration ships with a
-frozen old-schema fixture and a test proving lossless forward movement.
+Unknown or future versions are still refused. Migrations run as a numbered
+chain from the stored version to current; a step that does not advance the
+version is refused. Each migration ships with a frozen old-schema fixture and
+a test proving lossless forward movement, and a frozen current-schema fixture
+guards fresh initialization against drift.
 WAL, foreign_keys, busy_timeout, and synchronous=FULL are set.
 
 export reads all records and receipts from one transaction, preserving Review insertion order.

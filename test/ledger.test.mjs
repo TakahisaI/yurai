@@ -614,3 +614,62 @@ test('v1 ledgers migrate forward with order and data intact', t => {
   assert.throws(() => raw2.exec("UPDATE records SET body='{}'"), /immutable/);
   raw2.close();
 });
+test('current-schema fixture matches fresh initialization', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'yurai-'));
+  const path = join(dir, 'fresh.sqlite');
+  new SqliteStore(path, true).close();
+  const db = new DatabaseSync(path);
+  t.after(() => { db.close(); rmSync(dir, { recursive: true, force: true }); });
+  const live = db.prepare("SELECT sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'lookup\\_%' ESCAPE '\\'")
+    .all().map(r => r.sql.replace(/\s+/g, ' ').trim()).sort();
+  const fixture = readFileSync(new URL('./fixtures/v2-schema.sql', import.meta.url), 'utf8');
+  const norm = s => s.replace(/\s+/g, ' ').trim();
+  const body = fixture.split('\n').filter(l => !l.trim().startsWith('--')).join('\n');
+  const wanted = body.split(/;\n/).map(norm).filter(s => s && !s.startsWith('PRAGMA')).sort();
+  assert.equal(wanted.length, 12);
+  assert.deepEqual(live, wanted);
+  assert.equal(db.prepare('PRAGMA user_version').get().user_version, Number(fixture.match(/PRAGMA user_version = (\S+);/)[1]));
+  assert.equal(db.prepare('PRAGMA application_id').get().application_id, Number(fixture.match(/PRAGMA application_id = (\S+);/)[1]));
+});
+test('a database built from the current-schema fixture opens as a current ledger', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'yurai-'));
+  const path = join(dir, 'from-fixture.sqlite');
+  const raw = new DatabaseSync(path);
+  raw.exec(readFileSync(new URL('./fixtures/v2-schema.sql', import.meta.url), 'utf8'));
+  raw.close();
+  const store = new SqliteStore(path);
+  t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
+  assert.equal(store.schemaVersion(), 2);
+  assert.equal(store.doctor().ok, true);
+});
+test('failed migration leaves version and data intact for retry', t => {
+  // Refusal happens before any transaction begins; mid-rebuild crash safety
+  // rests on the single-transaction rebuild (crash tests arrive in slice 3).
+  const dir = mkdtempSync(join(tmpdir(), 'yurai-'));
+  const path = join(dir, 'broken-v1.sqlite');
+  const seed = new DatabaseSync(path);
+  seed.exec(readFileSync(new URL('./fixtures/v1-schema.sql', import.meta.url), 'utf8'));
+  const at = '2026-09-27T00:00:00.000Z', actor = '{"kind":"human","id":"seed"}';
+  seed.exec('PRAGMA foreign_keys=OFF;');
+  seed.exec(`INSERT INTO records(id,type,body,actor,created_at) VALUES
+    ('src_b','source','{"title":"b","medium":"note","uri":"urn:yurai:synthetic:b"}','${actor}','${at}'),
+    ('evd_b','evidence','{"source_id":"src_b","quote":"qb"}','${actor}','${at}'),
+    ('evd_c','evidence','{"source_id":"src_b","quote":"qc"}','${actor}','${at}');
+    INSERT INTO links(from_id,to_id,role) VALUES ('evd_b','src_b','source'),
+    ('evd_c','src_missing','source');`);
+  seed.close();
+  assert.throws(() => new SqliteStore(path), code('SCHEMA'));
+  const broken = new DatabaseSync(path);
+  assert.equal(broken.prepare('PRAGMA user_version').get().user_version, 1);
+  assert.equal(broken.prepare('SELECT count(*) AS n FROM records').get().n, 3);
+  assert.equal(broken.prepare('SELECT count(*) AS n FROM links').get().n, 2);
+  broken.close();
+  const repair = new DatabaseSync(path);
+  repair.exec(`INSERT INTO records(id,type,body,actor,created_at) VALUES
+    ('src_missing','source','{"title":"late","medium":"note","uri":"urn:yurai:synthetic:late"}','${actor}','${at}');`);
+  repair.close();
+  const store = new SqliteStore(path);
+  t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
+  assert.equal(store.schemaVersion(), 2);
+  assert.deepEqual(store.entries().map(e => e.id), ['src_b', 'evd_b', 'evd_c', 'src_missing']);
+});
