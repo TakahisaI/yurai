@@ -149,6 +149,26 @@ test('retrieval eval: withdrawn assessment path keeps full states on the audit p
   assert.equal(item.via[0].source.state, 'proposed');
 });
 
+test('retrieval eval: routed results carry paths, never corroboration counts', t => {
+  const { store, ledgerApi } = setup();
+  t.after(() => store.close());
+  const result = ledgerApi.search('38℃', { expand: 'evidence' });
+  assert.ok(result.items.length > 1);
+  const banned = ['score', 'rank', 'weight', 'confidence', 'count', 'corroboration', 'support_count'];
+  for (const item of result.items) {
+    for (const key of banned) assert.ok(!(key in item), `${item.entry.id} carries ${key}`);
+    assert.ok(item.via.length > 0);
+    for (const v of item.via) {
+      for (const side of ['evidence', 'assessment', 'source']) {
+        assert.ok(v[side].entry.id);
+        assert.ok(['proposed', 'accepted', 'rejected', 'withdrawn'].includes(v[side].state));
+      }
+      assert.ok(v.match_fields.length > 0);
+    }
+    if (!item.paths_truncated) assert.equal(item.total_paths, item.via.length);
+  }
+});
+
 test('retrieval eval: withdrawn source path keeps full states on the audit path', t => {
   const { store, ledgerApi } = setup();
   t.after(() => store.close());
