@@ -143,12 +143,16 @@ function semantic(input: Input): void {
     } else {
       if (d.searched_sha256 === undefined || d.searched_bytes === undefined)
         fail('VALIDATION', `${input.id}: checked outcomes pin the searched bytes`);
-      if (d.outcome === 'match' && (d.occurrences === undefined
+      if (d.outcome === 'match' && (d.occurrences !== 1
         || (d.method === 'verbatim' && (d.passage_sha256 === undefined || d.byte_offset === undefined || d.byte_length === undefined))))
-        fail('VALIDATION', `${input.id}: match pins the passage`);
+        fail('VALIDATION', `${input.id}: match pins one passage`);
+      if (d.outcome === 'match' && no('occurrence_offsets'))
+        fail('VALIDATION', `${input.id}: match lists no candidates`);
       if (d.outcome === 'multiple' && (d.occurrences === undefined || d.occurrences < 2
         || (d.method === 'verbatim' && !d.occurrence_offsets?.length)))
         fail('VALIDATION', `${input.id}: multiple pins candidates`);
+      if (d.outcome === 'multiple' && no('passage_sha256', 'byte_offset', 'byte_length'))
+        fail('VALIDATION', `${input.id}: multiple pins no single passage`);
       if (d.outcome === 'mismatch' && no('passage_sha256', 'byte_offset', 'byte_length', 'occurrences', 'occurrence_offsets'))
         fail('VALIDATION', `${input.id}: mismatch references no passage`);
       if (d.method === 'normalized' && no('passage_sha256', 'byte_offset', 'byte_length', 'occurrence_offsets'))

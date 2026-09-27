@@ -455,6 +455,18 @@ test('verification contract rejects bad shapes and wrong targets', t => {
   ledger.capture(bundle([{ id: 'src_x', type: 'source', data: { title: 'other', medium: 'note', uri: 'urn:yurai:synthetic:other' } }], 'req_src_x'));
   assert.throws(() => ledger.capture(bad({ ...good, target_source_id: 'src_x' }, 'req_bad4')), code('VALIDATION'));
   ledger.capture(bad(good, 'req_good'));
+  assert.throws(() => ledger.capture(bad({ ...good, occurrences: 2 }, 'req_bad6')), code('VALIDATION'));
+  assert.throws(() => ledger.capture(bad({ ...good, occurrence_offsets: [6] }, 'req_bad7')), code('VALIDATION'));
+  const goodMulti = { target_evidence_id: 'evd_m', target_source_id: 'src_v', outcome: 'multiple', method: 'verbatim',
+    verified_at: good.verified_at, searched_sha256: good.searched_sha256, searched_bytes: 25,
+    occurrences: 2, occurrence_offsets: [0, 13] };
+  ledger.capture(bad(goodMulti, 'req_good_multi'));
+  assert.throws(() => ledger.capture(bad({ ...goodMulti, passage_sha256: '1'.repeat(64) }, 'req_bad8')), code('VALIDATION'));
+  const snap = ledger.exportSnapshot();
+  snap.entries.push({ id: 'bad_req_bad9', type: 'verification', data: { ...good, occurrences: 2 },
+    created_at: good.verified_at, actor });
+  snap.receipts.push({ request_id: 'req_bad9', digest: 'b'.repeat(64), ids: ['bad_req_bad9'] });
+  assert.throws(() => setup(t).ledger.importSnapshot(snap), code('VALIDATION'));
   assert.throws(() => ledger.capture(bundle([{ id: 'rev_ver', type: 'review',
     data: { target_id: 'bad_req_good', state: 'accepted', rationale: 'nope' } }], 'req_rev_ver')), code('VALIDATION'));
   assert.throws(() => ledger.verifyEvidence({ evidence_id: 'missing', content: Buffer.from('x'), actor, request_id: 'req_nf' }), code('NOT_FOUND'));
