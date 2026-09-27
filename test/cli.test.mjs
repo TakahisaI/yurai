@@ -203,3 +203,29 @@ test('CLI refuses oversized import before migrating an old target', t => {
   assert.equal(check.prepare('PRAGMA user_version').get().user_version, 1);
   check.close();
 });
+test('CLI --readonly serves reads and refuses writes without touching bytes', t => {
+  const { dir, db, run } = setup(t);
+  assert.equal(run(['init']).status, 0);
+  assert.equal(run(['capture', '--file', 'examples/capture.json']).status, 0);
+  const before = readFileSync(db);
+  assert.equal(JSON.parse(run(['search', '架空', '--readonly']).stdout).items.length, 2);
+  assert.equal(JSON.parse(run(['show', 'clm_demo', '--readonly']).stdout).entry.id, 'clm_demo');
+  assert.ok(JSON.parse(run(['export', '--readonly']).stdout).entries.length > 0);
+  assert.equal(JSON.parse(run(['doctor', '--readonly']).stdout).fts_integrity, 'skipped-readonly');
+  const rec = join(dir, 'rec.json');
+  writeFileSync(rec, JSON.stringify({ id: 'clm_ro_cli', type: 'claim',
+    data: { text: 'readonly probe', kind: 'assertion', attributed_to: 't' } }));
+  const add = run(['add', '--file', rec, '--readonly']);
+  assert.equal(add.status, 1);
+  assert.match(add.stderr, /READONLY/);
+  const review = run(['review', 'clm_demo', '--state', 'accepted', '--reason', 'x', '--readonly']);
+  assert.equal(review.status, 1);
+  assert.match(review.stderr, /READONLY/);
+  assert.deepEqual(readFileSync(db), before);
+});
+test('CLI rejects init --readonly as contradictory', t => {
+  const { run } = setup(t);
+  const out = run(['init', '--readonly']);
+  assert.equal(out.status, 2);
+  assert.match(out.stderr, /readonly/);
+});

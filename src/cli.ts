@@ -23,7 +23,7 @@ const help = `yurai — a local ledger of claims and their grounds
   yurai schema [bundle|record|snapshot]
 
 Global: --db PATH, --actor ID, --actor-kind KIND, --request-id ID,
-        --limit 1..100, --offset N, --help
+        --limit 1..100, --offset N, --readonly, --help
 File '-' reads stdin. Output is JSON; errors go to stderr.
 Accepted means retained after review, NOT established as true.
 Source URIs are stored only: no network access or model calls.
@@ -61,7 +61,7 @@ try {
       'actor-kind': { type: 'string' }, 'request-id': { type: 'string' }, kind: { type: 'string' },
       state: { type: 'string' }, reason: { type: 'string' }, edition: { type: 'string' }, method: { type: 'string' },
       limit: { type: 'string' }, offset: { type: 'string' },
-      'dry-run': { type: 'boolean' }, 'include-inactive': { type: 'boolean' }, expand: { type: 'string' }, help: { type: 'boolean', short: 'h' } } });
+      'dry-run': { type: 'boolean' }, 'include-inactive': { type: 'boolean' }, expand: { type: 'string' }, readonly: { type: 'boolean' }, help: { type: 'boolean', short: 'h' } } });
   const [command, arg] = args;
   if (v.help || !command) { process.stdout.write(help); }
   else {
@@ -74,7 +74,8 @@ try {
       search: ['kind','limit','offset','include-inactive','expand'], show: ['limit','offset','request-id'],
       verify: ['file','edition','method','actor','actor-kind','request-id','dry-run'],
       export: [], import: ['file'], doctor: [], schema: [] };
-    for (const key of Object.keys(v)) if (!['db','help'].includes(key) && !allowed[command]!.includes(key)) usage(`--${key} is not valid for ${command}`);
+    for (const key of Object.keys(v)) if (!['db','help','readonly'].includes(key) && !allowed[command]!.includes(key)) usage(`--${key} is not valid for ${command}`);
+    if (command === 'init' && v.readonly) usage('--readonly cannot create or initialize a ledger');
     let result: unknown;
     if (command === 'schema') {
       const schemas: Record<string, unknown> = { bundle: bundleSchema, record: inputSchema, snapshot: snapshotSchema };
@@ -86,7 +87,7 @@ try {
       // Import reads (and size-checks) its input before opening the target, so a
       // refusal leaves the database file untouched: never migrated, never created.
       const importInput = command === 'import' ? readJson(v.file, 16 * 1024 * 1024) : undefined;
-      store = new SqliteStore(db, command === 'init');
+      store = new SqliteStore(db, command === 'init', { readonly: v.readonly ?? false });
       const ledger = new Ledger(store);
       const actor = { kind: v['actor-kind'] ?? 'human', id: v.actor ?? 'local' };
       const request_id = v['request-id'] ?? `req_${randomUUID()}`;
