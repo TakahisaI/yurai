@@ -87,7 +87,7 @@ Source blobs and the far side of external URIs are out of export scope. Actors a
 ## Deliberate limits of the initial implementation
 
 capture's supersedes check and export/restore read everything, sized for small ledgers.
-Synchronous waits with BEGIN IMMEDIATE serialize writes; not tuned for long-lived servers or heavy parallel writes.
+Synchronous waits with BEGIN IMMEDIATE serialize writes; blocked writers retry for 5s (busy_timeout), then fail with exit 1 (`IO_OR_RUNTIME`, 'database is locked') and persist nothing partial. Not tuned for long-lived servers or heavy parallel writes.
 Search order is newest-first, not relevance ranking. No full Unicode case folding or morphological processing.
 show pages include Reviews, so reading all grounds requires following next_offset.
 Quote truth, locator validity, and source independence are unevaluated.
