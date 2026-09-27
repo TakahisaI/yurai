@@ -4,6 +4,7 @@
 // synthetic; no private data is read. Memory is intentionally unmeasured:
 // honest heap deltas need GC control at both boundaries (a later pass).
 import { performance } from 'node:perf_hooks';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -58,8 +59,10 @@ function buildLedger({ claims, evdPerClaim, asmPerEvd, reviewsPerClaim, verifica
         counts.assessment++;
       }
       if (rand() < verificationsFraction) {
+        const searched = Buffer.from(`prefix ${quote} suffix`, 'utf8');
         entries.push({ id: `${evd}_v`, type: 'verification', data: { target_evidence_id: evd, target_source_id: src,
-          outcome: 'mismatch', method: 'verbatim', verified_at: AT, searched_sha256: '0'.repeat(64), searched_bytes: quote.length } });
+          outcome: 'mismatch', method: 'verbatim', verified_at: AT,
+          searched_sha256: createHash('sha256').update(searched).digest('hex'), searched_bytes: searched.length } });
         counts.verification++;
       }
     }
@@ -100,12 +103,13 @@ for (const shape of SCALES) {
   const { dir, store, ledger, counts, buildMs } = buildLedger(shape);
   const directCommon = time(() => ledger.search('COMMONTERM', { limit: 50 }));
   const directRare = time(() => ledger.search(`CLAIMRARE${shape.claims - 1}`, { limit: 50 }));
+  const directShort = time(() => ledger.search('気孔', { limit: 50 }));
   const expanded = time(() => ledger.search('RARE7_0', { limit: 50, expand: 'evidence' }));
   const show = time(() => ledger.show('clm_m0007'));
   const t0 = performance.now();
   const snapshot = ledger.exportSnapshot();
-  const snapshotJson = JSON.stringify(snapshot);
   const exportMs = performance.now() - t0;
+  const snapshotJson = JSON.stringify(snapshot);
   const dir2 = mkdtempSync(join(tmpdir(), 'yurai-scale-'));
   const store2 = new SqliteStore(join(dir2, 'ledger.sqlite'), true);
   const parsed = JSON.parse(snapshotJson);
@@ -118,7 +122,7 @@ for (const shape of SCALES) {
   const capture = time(() => ledger.capture({ version: 1, request_id: `req_probe_${shape.name}_${probe}`, actor,
     entries: [{ id: `clm_probe_${shape.name}_${probe++}`, type: 'claim', data: { text: 'probe', kind: 'assertion', attributed_to: 'syn' } }] }));
   report.scales.push({ shape: shape.name, counts, build_ms: Math.round(buildMs),
-    direct_common: directCommon, direct_rare: directRare, expanded, show, capture_single: capture,
+    direct_common: directCommon, direct_rare: directRare, direct_short_2char: directShort, expanded, show, capture_single: capture,
     export_ms: Math.round(exportMs), export_bytes: Buffer.byteLength(snapshotJson, 'utf8'),
     import_ms: Math.round(importMs) });
   store.close();
