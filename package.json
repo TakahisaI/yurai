@@ -1,0 +1,34 @@
+{
+  "name": "yurai",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A local, provenance-first ledger for claims and their grounds.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.16.0"
+  },
+  "bin": {
+    "yurai": "dist/cli.js"
+  },
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test test/cli.test.mjs test/ledger.test.mjs",
+    "check": "npm run typecheck && npm test",
+    "start": "node dist/cli.js",
+    "prepack": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "22.15.33",
+    "typescript": "5.8.3"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "docs",
+    "examples"
+  ]
+}

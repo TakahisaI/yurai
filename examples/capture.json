@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "request_id": "req_synthetic_demo_v1",
+  "actor": {"kind": "human", "id": "synthetic-example"},
+  "entries": [
+    {"id": "src_demo", "type": "source", "data": {
+      "title": "架空の比較実験 — 実在する研究結果ではありません",
+      "medium": "experiment", "uri": "urn:yurai:example:comparison:v1", "version": "v1",
+      "note": "機能確認用に作った人工データです。外部の論文を引用していません。"
+    }},
+    {"id": "clm_demo", "type": "claim", "data": {
+      "text": "架空の実験では、手法Aの成績が手法Bを上回った。",
+      "kind": "assertion", "attributed_to": "架空の実験者",
+      "scope": "人工データ、条件X、試行1回。一般化はできない。",
+      "why": "主張と根拠と解釈を分けて保存できるか確認する。"
+    }},
+    {"id": "evd_demo", "type": "evidence", "data": {
+      "source_id": "src_demo", "quote": "条件X: A=80, B=70（架空の値）", "locator": "架空の表1、条件Xの行"
+    }},
+    {"id": "asm_demo", "type": "assessment", "data": {
+      "claim_id": "clm_demo", "evidence_id": "evd_demo", "stance": "reports",
+      "rationale": "資料がこの結果を記載している、という関係。効果の真実性や再現性は評価していない。"
+    }},
+    {"id": "clm_limit", "type": "claim", "data": {
+      "text": "この比較だけでは、手法Aが一般に優れているとは判断できない。",
+      "kind": "inference", "attributed_to": "synthetic-example", "scope": "この架空の比較実験に限る。"
+    }},
+    {"id": "rel_limit", "type": "relation", "data": {
+      "from_claim_id": "clm_limit", "to_claim_id": "clm_demo", "relation": "qualifies",
+      "rationale": "単一条件・単一試行からの一般化を制限する。元の実験結果への反証ではない。"
+    }}
+  ]
+}

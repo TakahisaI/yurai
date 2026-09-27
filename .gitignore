@@ -1,0 +1,16 @@
+node_modules/
+dist/
+coverage/
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+*.tgz
+.env
+.env.*
+!.env.example
+.yurai/
+snapshot*.json
+scratch/
+.DS_Store
+*.log
