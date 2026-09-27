@@ -12,7 +12,7 @@ const help = `yurai — a local ledger of claims and their grounds
   yurai capture --file bundle.json [--dry-run]
   yurai add --file record.json [--actor ID] [--actor-kind human|agent|import]
   yurai review ID --state accepted|rejected|withdrawn|proposed --reason TEXT
-  yurai search QUERY [--kind claim|source] [--include-inactive]
+  yurai search QUERY [--kind claim|source] [--include-inactive] [--expand evidence]
   yurai show ID [--limit 20] [--offset 0]
   yurai show --request-id ID [--limit 20] [--offset 0]
   yurai export                         # snapshot JSON to stdout
@@ -54,7 +54,7 @@ try {
     options: { db: { type: 'string' }, file: { type: 'string' }, actor: { type: 'string' },
       'actor-kind': { type: 'string' }, 'request-id': { type: 'string' }, kind: { type: 'string' },
       state: { type: 'string' }, reason: { type: 'string' }, limit: { type: 'string' }, offset: { type: 'string' },
-      'dry-run': { type: 'boolean' }, 'include-inactive': { type: 'boolean' }, help: { type: 'boolean', short: 'h' } } });
+      'dry-run': { type: 'boolean' }, 'include-inactive': { type: 'boolean' }, expand: { type: 'string' }, help: { type: 'boolean', short: 'h' } } });
   const [command, arg] = args;
   if (v.help || !command) { process.stdout.write(help); }
   else {
@@ -64,7 +64,7 @@ try {
     const allowed: Record<string, string[]> = {
       init: [], capture: ['file','dry-run'], add: ['file','actor','actor-kind','request-id','dry-run'],
       review: ['state','reason','actor','actor-kind','request-id','dry-run'],
-      search: ['kind','limit','offset','include-inactive'], show: ['limit','offset','request-id'],
+      search: ['kind','limit','offset','include-inactive','expand'], show: ['limit','offset','request-id'],
       export: [], import: ['file'], doctor: [], schema: [] };
     for (const key of Object.keys(v)) if (!['db','help'].includes(key) && !allowed[command]!.includes(key)) usage(`--${key} is not valid for ${command}`);
     let result: unknown;
@@ -89,7 +89,10 @@ try {
             data: { target_id: arg, state: v.state, rationale: v.reason } }] }, v['dry-run']); break;
         case 'search':
           if (v.kind && v.kind !== 'claim' && v.kind !== 'source') usage('--kind must be claim or source');
-          result = ledger.search(arg!, { kind: v.kind === 'source' ? 'source' : 'claim', limit: Number(v.limit ?? 20), offset: Number(v.offset ?? 0), includeInactive: v['include-inactive'] ?? false }); break;
+          if (v.expand !== undefined && v.expand !== 'evidence') usage('--expand must be evidence');
+          if (v.kind === 'source' && v.expand !== undefined) usage('--expand routes to claims only');
+          result = ledger.search(arg!, { kind: v.kind === 'source' ? 'source' : 'claim', limit: Number(v.limit ?? 20), offset: Number(v.offset ?? 0),
+            includeInactive: v['include-inactive'] ?? false, ...(v.expand === undefined ? {} : { expand: 'evidence' as const }) }); break;
         case 'show':
           result = v['request-id'] !== undefined
             ? ledger.inspectCapture(v['request-id'], Number(v.limit ?? 20), Number(v.offset ?? 0))

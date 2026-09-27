@@ -148,3 +148,13 @@ export function pageBounds(limit: number, offset: number): void {
     fail('VALIDATION', 'limit must be 1..100; offset must be 0..1000000');
 }
 export function normalize(s: string): string { return s.normalize('NFKC').toLowerCase(); }
+export type EvidenceField = 'quote' | 'paraphrase';
+/** Lexical rule for expanded discovery: every token must occur in the joined
+ *  content fields (mirrors direct-search AND semantics); reports the fields
+ *  holding at least one token. Locators are pointers, not content, and stay out. */
+export function matchedEvidenceFields(data: { quote?: string; paraphrase?: string }, tokens: string[]): EvidenceField[] {
+  const fields: EvidenceField[] = ['quote', 'paraphrase'];
+  const joined = normalize(fields.map(f => data[f]).filter(Boolean).join('\n'));
+  if (!tokens.every(t => joined.includes(t))) return [];
+  return fields.filter(f => data[f] !== undefined && tokens.some(t => normalize(data[f] as string).includes(t)));
+}

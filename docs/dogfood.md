@@ -54,7 +54,8 @@ MCP server, auto-parser, or full-chat ingestion has been introduced.
 | Minimal guide/worked example | Adopted files supplied now, not blocked on indefinite additional use |
 | Fixtures/regression tests and check | Synthetic additions included; actual test/CI results belong in the implementing PR |
 
-**#1 remains open for the missing handoff evidence, not an unbounded research phase.**
+**Update 2026-09-27: the handoff below passed and #1 is closed.** It stayed open
+for the missing handoff evidence, not an unbounded research phase.
 
 ## One bounded fresh-session handoff
 
@@ -98,6 +99,18 @@ External reads and why still needed:
 User interventions / agent assembly / retries / misses:
 Result per acceptance criterion / remaining bounded fix:
 ```
+
+## Handoff outcome (2026-09-27)
+
+Fresh host session, existing private ledger (26 records, three staged cases),
+three natural follow-up questions, no IDs/quotes/source lists disclosed.
+The session correctly reused supporting, doubting, and qualifying material
+with attributions; distinguished hypothesis/inference from source claims with
+their relations; traced the withdrawn cost claim, its reason (an unverified
+figure exceeding its evidence), and the superseding qualitative claim without
+reviving the figure; and declared working states, anchor limits, and missing
+items. No external re-reads, no user interventions, no captures, no retries.
+All three Issue #1 cases evidenced; #1 closed with a sanitized summary comment.
 
 ## How to interpret completion
 
