@@ -157,3 +157,34 @@ test('CLI rejects bad verify usage and undecodable input', t => {
   const big = join(dir, 'big.txt'); writeFileSync(big, Buffer.alloc(4 * 1024 * 1024 + 1, 'x'));
   assert.equal(run(['verify','evd_cli','--file',big]).status, 2);
 });
+test('CLI refuses to export snapshots over 16 MiB without partial output', t => {
+  const { dir, run } = setup(t);
+  run(['init']);
+  const text = 'x'.repeat(8000);
+  for (let b = 0; b < 23; b++) {
+    const entries = [];
+    for (let i = 0; i < 100; i++) entries.push({ id: `clm_big_${b}_${i}`, type: 'claim',
+      data: { text, kind: 'assertion', attributed_to: 'bulk' } });
+    const file = join(dir, `bulk-${b}.json`);
+    writeFileSync(file, JSON.stringify({ version: 1, request_id: `req_bulk_${b}`,
+      actor: { kind: 'agent', id: 'bulk' }, entries }));
+    assert.equal(run(['capture', '--file', file]).status, 0);
+  }
+  const out = run(['export']);
+  assert.equal(out.status, 2);
+  assert.equal(out.stdout, '');
+  assert.match(out.stderr, /16 MiB/);
+});
+test('CLI refuses to import snapshots over 16 MiB and leaves the target empty', t => {
+  const { dir, run } = setup(t);
+  run(['init']);
+  const huge = join(dir, 'huge.json');
+  writeFileSync(huge, Buffer.alloc(16 * 1024 * 1024 + 1, 120));
+  const out = run(['import', '--file', huge]);
+  assert.equal(out.status, 2);
+  assert.equal(out.stdout, '');
+  assert.match(out.stderr, /exceeds/);
+  const snapshot = JSON.parse(run(['export']).stdout);
+  assert.deepEqual(snapshot.entries, []);
+  assert.deepEqual(snapshot.receipts, []);
+});
