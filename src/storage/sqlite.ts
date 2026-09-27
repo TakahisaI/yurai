@@ -191,6 +191,9 @@ export class SqliteStore implements Store {
   }
   count(): number { return Number(this.db.prepare('SELECT count(*) AS n FROM records').get()?.n); }
   doctor() {
+    return this.transaction(() => this.check());
+  }
+  private check() {
     const integrity = this.db.prepare('PRAGMA integrity_check').all();
     const foreignKeys = this.db.prepare('PRAGMA foreign_key_check').all();
     // The FTS self-check is a special write; readonly skips it and says so.

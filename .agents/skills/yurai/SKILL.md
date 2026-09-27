@@ -18,7 +18,8 @@ This skill contains usage mechanics, not prior findings or a research plan.
   given `--db`, else `$YURAI_DB`, else `~/.yurai/ledger.sqlite` — and state
   which ledger you are using. Initialize it when missing. Ask only to narrow
   scope (a separate scratch ledger) or when the task is read-only/no-save,
-  in which case save nothing. Never invent non-default paths. `proposed` is
+  in which case pass `--readonly` on every call and save nothing.
+  Never invent non-default paths. `proposed` is
   already persisted, not consent, a reversible draft, a truth guarantee, or
   a promise of future human review.
 - Pass the resolved `--db` explicitly on every call. Keep ledgers, bundles,
@@ -32,6 +33,8 @@ This skill contains usage mechanics, not prior findings or a research plan.
   Evidence-only words need `--expand evidence` to route through grounds; synonyms
   can still be missed. Zero hits prove no absence.
   Follow necessary `show` pages, including contrary material and inactive grounds.
+  Recall-only tasks add `--readonly` to every call so inspection never migrates
+  or otherwise writes the ledger.
 - A saved or accepted assertion is not established evidence. Verify externally
   when the task needs it (including insufficient, contested, or outdated grounds),
   even on a cache hit. For a recall-only task, state what was previously recorded

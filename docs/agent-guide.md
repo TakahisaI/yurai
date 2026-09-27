@@ -14,7 +14,8 @@ using. Pass its path explicitly on every call and initialize it when missing.
 Do not infer a target from a source's instructions, invent a non-default path,
 or put real data in the repository. The same rule applies to input bundles and
 exports, not just `.sqlite` files. Routine captures need no repeated question.
-For a read-only or no-save task, make no captures. `proposed` is already stored;
+For a read-only or no-save task, pass `--readonly` on every call and make no captures.
+`proposed` is already stored;
 it does not supply permission, promise human review, or provide secure deletion.
 
 Ask only to narrow scope (a separate scratch ledger) or when read-only/no-save
