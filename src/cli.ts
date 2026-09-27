@@ -83,6 +83,9 @@ try {
       result = { $schema: 'https://json-schema.org/draft/2020-12/schema', ...schemas[name] as object };
     } else {
       const db = resolve(v.db ?? process.env.YURAI_DB ?? join(homedir(), '.yurai', 'ledger.sqlite'));
+      // Import reads (and size-checks) its input before opening the target, so a
+      // refusal leaves the database file untouched: never migrated, never created.
+      const importInput = command === 'import' ? readJson(v.file, 16 * 1024 * 1024) : undefined;
       store = new SqliteStore(db, command === 'init');
       const ledger = new Ledger(store);
       const actor = { kind: v['actor-kind'] ?? 'human', id: v.actor ?? 'local' };
@@ -124,7 +127,7 @@ try {
             actor, request_id, dryRun: v['dry-run'] ?? false }); break;
         }
         case 'export': result = ledger.exportSnapshot(); break;
-        case 'import': result = ledger.importSnapshot(readJson(v.file, 16 * 1024 * 1024)); break;
+        case 'import': result = ledger.importSnapshot(importInput); break;
         case 'doctor': result = store.doctor(); if (!(result as { ok: boolean }).ok) process.exitCode = 1; break;
       }
     }

@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { DatabaseSync } from 'node:sqlite';
 const cli = new URL('../dist/cli.js', import.meta.url);
 function setup(t) {
   const dir = mkdtempSync(join(tmpdir(), 'yurai-cli-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -156,4 +157,49 @@ test('CLI rejects bad verify usage and undecodable input', t => {
   assert.equal(run(['verify','evd_cli','--file',join(dir,'binary.dat')]).status, 2);
   const big = join(dir, 'big.txt'); writeFileSync(big, Buffer.alloc(4 * 1024 * 1024 + 1, 'x'));
   assert.equal(run(['verify','evd_cli','--file',big]).status, 2);
+});
+test('CLI refuses to export snapshots over 16 MiB without partial output', t => {
+  const { dir, run } = setup(t);
+  run(['init']);
+  const text = 'x'.repeat(8000);
+  for (let b = 0; b < 23; b++) {
+    const entries = [];
+    for (let i = 0; i < 100; i++) entries.push({ id: `clm_big_${b}_${i}`, type: 'claim',
+      data: { text, kind: 'assertion', attributed_to: 'bulk' } });
+    const file = join(dir, `bulk-${b}.json`);
+    writeFileSync(file, JSON.stringify({ version: 1, request_id: `req_bulk_${b}`,
+      actor: { kind: 'agent', id: 'bulk' }, entries }));
+    assert.equal(run(['capture', '--file', file]).status, 0);
+  }
+  const out = run(['export']);
+  assert.equal(out.status, 2);
+  assert.equal(out.stdout, '');
+  assert.match(out.stderr, /16 MiB/);
+});
+test('CLI refuses to import snapshots over 16 MiB and leaves the target empty', t => {
+  const { dir, run } = setup(t);
+  run(['init']);
+  const huge = join(dir, 'huge.json');
+  writeFileSync(huge, Buffer.alloc(16 * 1024 * 1024 + 1, 120));
+  const out = run(['import', '--file', huge]);
+  assert.equal(out.status, 2);
+  assert.equal(out.stdout, '');
+  assert.match(out.stderr, /exceeds/);
+  const snapshot = JSON.parse(run(['export']).stdout);
+  assert.deepEqual(snapshot.entries, []);
+  assert.deepEqual(snapshot.receipts, []);
+});
+test('CLI refuses oversized import before migrating an old target', t => {
+  const { dir, db, run } = setup(t);
+  const seed = new DatabaseSync(db);
+  seed.exec(readFileSync(new URL('./fixtures/v1-schema.sql', import.meta.url), 'utf8'));
+  seed.close();
+  const huge = join(dir, 'huge.json');
+  writeFileSync(huge, Buffer.alloc(16 * 1024 * 1024 + 1, 120));
+  const out = run(['import', '--file', huge]);
+  assert.equal(out.status, 2);
+  assert.equal(out.stdout, '');
+  const check = new DatabaseSync(db);
+  assert.equal(check.prepare('PRAGMA user_version').get().user_version, 1);
+  check.close();
 });

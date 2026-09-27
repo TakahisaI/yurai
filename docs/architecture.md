@@ -91,4 +91,5 @@ Synchronous waits with BEGIN IMMEDIATE serialize writes; blocked writers retry f
 Search order is newest-first, not relevance ranking. No full Unicode case folding or morphological processing.
 show pages include Reviews, so reading all grounds requires following next_offset.
 Quote truth, locator validity, and source independence are unevaluated.
-Large ledgers, redaction, merge-import, quote matching, and privilege separation are later issues; never display them as implemented.
+Large ledgers, redaction, merge-import, and privilege separation are later issues; never display them as implemented.
+Snapshots over 16 MiB are refused on export (exit 2, nothing written) and import (target untouched); streaming export or SQLite online backup arrives only when real ledgers approach the limit.

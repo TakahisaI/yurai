@@ -99,9 +99,12 @@ node dist/cli.js export --db ./demo.sqlite > snapshot.json
 node dist/cli.js init --db ./restored.sqlite
 node dist/cli.js import --db ./restored.sqlite --file snapshot.json
 node dist/cli.js doctor --db ./restored.sqlite
+node dist/cli.js export --db ./restored.sqlite > restored.json
+diff snapshot.json restored.json
 ```
 
 Restore targets an empty ledger only. IDs, recorders, timestamps, Review order, and replay-prevention receipts are preserved.
+The final compare is the actual restore verification: a restore must reproduce the snapshot byte for byte.
 `export` is a snapshot of ledger data and does not include external source files.
 Prefer the export above to copying a live SQLite file. The JSON includes quotations and private notes.
 
