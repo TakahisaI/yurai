@@ -106,6 +106,7 @@ diff snapshot.json restored.json
 Restore targets an empty ledger only. IDs, recorders, timestamps, Review order, and replay-prevention receipts are preserved.
 The final compare is the actual restore verification: a restore must reproduce the snapshot byte for byte.
 `export` is a snapshot of ledger data and does not include external source files.
+Deletion and redaction policy (purge vs redact vs explicit non-goals) is specified in `docs/adr/0005-deletion-policy.md`; no destructive operation is implemented yet.
 Prefer the export above to copying a live SQLite file. The JSON includes quotations and private notes.
 
 ## Entry points for development
