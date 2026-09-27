@@ -35,6 +35,8 @@ export class Ledger {
       const evidence = byId.get(input.data.target_evidence_id) ?? this.store.get(input.data.target_evidence_id);
       if (evidence?.type === 'evidence' && evidence.data.source_id !== input.data.target_source_id)
         fail('VALIDATION', `${input.id}: verification names a different source than its evidence`);
+      if (evidence?.type === 'evidence' && !evidence.data.quote)
+        fail('VALIDATION', `${input.id}: verification target has no quote to match`);
     }
     // Supersession is historical replacement, not a general reasoning edge.
     const replacements = [...this.store.entries(), ...inputs].filter(e => e.type === 'relation' && e.data.relation === 'supersedes');
@@ -107,6 +109,8 @@ export class Ledger {
     if (method !== 'verbatim' && method !== 'normalized') fail('VALIDATION', 'method must be verbatim or normalized');
     const evidence = this.required(evidence_id);
     if (evidence.type !== 'evidence') fail('VALIDATION', `${evidence_id}: not evidence`);
+    const quote = evidence.data.quote;
+    if (!quote) fail('VALIDATION', `${evidence_id}: evidence has no quote to match`);
     const id = `vrf_${createHash('sha256').update(input.request_id).digest('hex')}`;
     const verified_at = this.now();
     type Data = Extract<Input, { type: 'verification' }>['data'];
@@ -117,10 +121,10 @@ export class Ledger {
     } else {
       if (content.length > MAX_VERIFY_BYTES) fail('VALIDATION', `content exceeds the ${MAX_VERIFY_BYTES}-byte verification limit`);
       let text: string;
-      try { text = new TextDecoder('utf-8', { fatal: true }).decode(content); }
+      // ignoreBOM keeps a leading U+FEFF in the string so character offsets map
+      // back onto the searched bytes that searched_sha256 pins.
+      try { text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(content); }
       catch { fail('VALIDATION', 'content is not valid UTF-8 text'); }
-      const quote = evidence.data.quote;
-      if (!quote) fail('VALIDATION', `${evidence_id}: evidence has no quote to match`);
       const found = matchQuote({ quote, prefix: evidence.data.prefix, suffix: evidence.data.suffix }, text, method);
       const searched_sha256 = createHash('sha256').update(content).digest('hex');
       const base = { target_evidence_id: evidence_id, target_source_id: evidence.data.source_id, verified_at,

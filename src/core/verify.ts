@@ -17,11 +17,16 @@ export function findOccurrences(content: string, quote: string, prefix?: string,
 }
 export function matchQuote(evidence: { quote: string; prefix?: string | undefined; suffix?: string | undefined },
   content: string, method: 'verbatim' | 'normalized'): { outcome: 'match' | 'mismatch' | 'multiple'; occurrences: number; offsets: number[] } {
-  const [text, quote, prefix, suffix] = method === 'verbatim' ? [content, evidence.quote, evidence.prefix, evidence.suffix]
-    : [normalizeForMatch(content), normalizeForMatch(evidence.quote),
-      evidence.prefix === undefined ? undefined : normalizeForMatch(evidence.prefix),
-      evidence.suffix === undefined ? undefined : normalizeForMatch(evidence.suffix)];
-  const offsets = quote ? findOccurrences(text, quote, prefix, suffix) : [];
+  let offsets: number[];
+  if (method === 'verbatim') {
+    offsets = evidence.quote ? findOccurrences(content, evidence.quote, evidence.prefix, evidence.suffix) : [];
+  } else {
+    // Normalized: the affixes join the quote before folding, so boundary
+    // whitespace folds as one span instead of being trimmed off each fragment.
+    const needle = evidence.quote.trim()
+      ? normalizeForMatch(`${evidence.prefix ?? ''}${evidence.quote}${evidence.suffix ?? ''}`) : '';
+    offsets = needle ? findOccurrences(normalizeForMatch(content), needle) : [];
+  }
   if (!offsets.length) return { outcome: 'mismatch', occurrences: 0, offsets: [] };
   if (offsets.length > 1) return { outcome: 'multiple', occurrences: offsets.length, offsets };
   return { outcome: 'match', occurrences: 1, offsets };

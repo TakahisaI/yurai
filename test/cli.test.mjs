@@ -150,6 +150,7 @@ test('CLI rejects bad verify usage and undecodable input', t => {
   assert.equal(run(['verify','evd_cli','--file',target,'--method','fuzzy']).status, 2);
   assert.equal(run(['verify','clm_cli','--file',target]).status, 2);
   assert.equal(run(['verify','evd_ptr','--file',target]).status, 2);
+  assert.equal(run(['verify','evd_ptr','--file',join(dir,'missing.txt')]).status, 2);
   assert.equal(run(['search','x','--edition','v1']).status, 2);
   writeFileSync(join(dir, 'binary.dat'), Buffer.from([0xff, 0xfe]));
   assert.equal(run(['verify','evd_cli','--file',join(dir,'binary.dat')]).status, 2);

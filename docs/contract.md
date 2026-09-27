@@ -108,8 +108,10 @@ undeclared). Warnings read `anchor_match`, `anchor_mismatch`,
 checked. A match verifies the passage, never the claim: `truth_evaluated`
 stays false and adopted state is untouched. Reviews never target verifications.
 
-Locator-only Evidence has no quote to match and fails validation, as do
-non-UTF-8 bytes and oversize input. Verification history rides the normal
+Locator-only Evidence has no quote to match and fails validation even when
+the file is unreadable, as do non-UTF-8 bytes and oversize input. Direct
+capture of a verification against quoteless Evidence fails the same way.
+Verification history rides the normal
 export/restore path losslessly. Schema v2 admits the record type; v1 ledgers
 migrate forward automatically on first open by any command, reads included
 (see architecture).

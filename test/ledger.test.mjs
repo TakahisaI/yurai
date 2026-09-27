@@ -462,6 +462,8 @@ test('verification contract rejects bad shapes and wrong targets', t => {
   assert.throws(() => ledger.verifyEvidence({ evidence_id: 'clm_plain', content: Buffer.from('x'), actor, request_id: 'req_wt' }), code('VALIDATION'));
   ledger.capture(bundle([{ id: 'evd_ptr', type: 'evidence', data: { source_id: 'src_v', locator: 'page 1' } }], 'req_ptr'));
   assert.throws(() => ledger.verifyEvidence({ evidence_id: 'evd_ptr', content: Buffer.from('page 1'), actor, request_id: 'req_pq' }), code('VALIDATION'));
+  assert.throws(() => ledger.verifyEvidence({ evidence_id: 'evd_ptr', content: null, detail: 'gone', actor, request_id: 'req_pq_null' }), code('VALIDATION'));
+  assert.throws(() => ledger.capture(bad({ ...good, target_evidence_id: 'evd_ptr' }, 'req_bad5')), code('VALIDATION'));
   assert.throws(() => ledger.verifyEvidence({ evidence_id: 'evd_m', content: Buffer.alloc(4 * 1024 * 1024 + 1), actor, request_id: 'req_big' }), code('VALIDATION'));
   assert.throws(() => ledger.verifyEvidence({ evidence_id: 'evd_m', content: Buffer.from([0xff]), actor, request_id: 'req_bin' }), code('VALIDATION'));
   assert.throws(() => ledger.verifyEvidence({ evidence_id: 'evd_m', content: Buffer.from('x'), actor, request_id: 'req_bm', method: 'fuzzy' }), code('VALIDATION'));
@@ -527,6 +529,27 @@ test('verification replay survives an advancing clock but still conflicts on cha
     actor, request_id: 'req_clock' }), code('CONFLICT'));
   assert.throws(() => ledger.verifyEvidence({ evidence_id: 'evd_c', content: bytes,
     actor: { kind: 'agent', id: 'other-agent' }, request_id: 'req_clock' }), code('CONFLICT'));
+});
+test('verification keeps byte offsets on the searched-bytes coordinate for BOM files', t => {
+  const { ledger, actor } = verifySetup(t);
+  const content = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('begin QV exact span end', 'utf8')]);
+  const checked = ledger.verifyEvidence({ evidence_id: 'evd_m', content, actor, request_id: 'req_bom' });
+  assert.equal(checked.outcome, 'match');
+  const data = checked.verification.entry.data;
+  assert.equal(data.byte_offset, 9);
+  assert.equal(data.byte_length, 13);
+  assert.equal(content.slice(data.byte_offset, data.byte_offset + data.byte_length).toString('utf8'), 'QV exact span');
+  assert.equal(data.searched_sha256, createHash('sha256').update(content).digest('hex'));
+});
+test('normalized matching keeps affix boundaries across folded whitespace', t => {
+  const { ledger, actor } = verifySetup(t);
+  const folded = ledger.verifyEvidence({ evidence_id: 'evd_m', content: Buffer.from('BEGIN\nQV  exact span\tEND', 'utf8'),
+    actor, request_id: 'req_norm_aff', method: 'normalized' });
+  assert.equal(folded.outcome, 'match');
+  assert.equal(folded.verification.entry.data.occurrences, 1);
+  const wrong = ledger.verifyEvidence({ evidence_id: 'evd_m', content: Buffer.from('OTHER\nQV  exact span\tEND', 'utf8'),
+    actor, request_id: 'req_norm_aff2', method: 'normalized' });
+  assert.equal(wrong.outcome, 'mismatch');
 });
 test('v1 ledgers migrate forward with order and data intact', t => {
   const dir = mkdtempSync(join(tmpdir(), 'yurai-'));
