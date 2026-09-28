@@ -6,8 +6,10 @@
 // per-phase heap deltas plus the post-cleanup residual per scale point.
 // Warm latency repeats a query on one open store; cold opens a fresh store on
 // the same db file per repetition (open + query + close per sample; process
-// cold only — the OS page cache is not dropped). Capture timings are measured
-// txn wall time inside BEGIN IMMEDIATE..COMMIT, not an OS-level lock proof.
+// cold only — the OS page cache is not dropped). Capture timings are
+// capture() wall time (parseBundle+digest validation runs pre-txn, ~0.05ms
+// single / ~1.1ms batch-20 — an upper bound on the IMMEDIATE hold, not an
+// OS-level lock measurement).
 import { performance } from 'node:perf_hooks';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -186,10 +188,15 @@ for (const shape of SCALES) {
   parsed = null;
   const heapAfterRelease = heapBytes();
   // Capture probes run last so export/import match the advertised counts.
-  // Each timing is the capture txn wall time (a BEGIN IMMEDIATE hold
-  // approximation as observed from JS), not an OS-level lock measurement.
-  // Both probes run the same checkReferences path, so the batch amortizes the
-  // per-txn full-ledger supersedes scan over 20 records.
+  // Each timing is capture() wall time: it includes pre-txn bundle validation
+  // (parseBundle+digest, ~0.05ms single / ~1.1ms batch-20), so it is an upper
+  // bound on the IMMEDIATE hold, not an OS-level lock measurement. Both probes
+  // run the same checkReferences path, so the batch amortizes the per-txn
+  // full-ledger supersedes scan over 20 records — but the pre-txn validation
+  // share (~1.1ms of the batch-20 total) is per-bundle work, not per-txn hold,
+  // so "batch per record" divides a mixed cost. Timed batch samples run at
+  // +25..+85 probe records over the shape base (negligible at scale, up to
+  // ~+4-10% on flat-100 absolute).
   let probe = 0;
   const capture = time(() => ledger.capture({ version: 1, request_id: `req_probe_${shape.name}_${probe}`, actor,
     entries: [{ id: `clm_probe_${shape.name}_${probe++}`, type: 'claim', data: { text: 'probe', kind: 'assertion', attributed_to: 'syn' } }] }));
