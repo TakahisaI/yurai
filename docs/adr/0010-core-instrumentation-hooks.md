@@ -75,3 +75,60 @@ lock durations.
 - Follow-ups: SQL-statement / SQLite-rows-examined counting, OS-level lock
   duration, workload-specific budgets from the measured baseline, and the
   ship/defer report.
+
+## Amendment — transaction-hold proxy + operation coverage (2026-09-28, #44 slice 5)
+
+Status: Accepted. Measurement only; no optimization, migration, or ranking change.
+
+`CountingStore` additionally records each `transaction()` hold via
+`txnTimings()` (one finite sample per call, including rolled-back attempts;
+`reset()` clears it; `snapshot()` keeps the count-only shape). Each sample
+approximates how long that call held the SQLite RESERVED lock (writable
+`BEGIN IMMEDIATE` to `COMMIT`/`ROLLBACK`): the hold clock starts inside a
+wrapped callback that the inner store invokes only after `BEGIN` succeeds,
+so the sample covers callback entry to `COMMIT`/`ROLLBACK` return —
+including SQLite CPU and commit fsync, excluding pre-txn validation,
+post-txn work, and `BEGIN`-acquisition waits — and explicitly not kernel
+lock tracing or WAL-lock introspection. A call whose `BEGIN` fails records
+exactly 0 (the callback never ran, so no hold occurred), distinctly from
+any real hold. The decorator still delegates verbatim, lives behind the
+`Store` port, and is never wrapped on production paths, so the assess-only,
+inert-by-default, parity-tested contract holds; `test/locks.test.mjs` pins
+the new behavior, including a real-contention regression test (held
+`BEGIN IMMEDIATE` elsewhere, contended attempt waits out the 5s
+busy-timeout, records 0).
+
+The harness gains a per-shape `locks` section: `txn_ms` (single-sample hold
+per operation from a separate pristine-shape pass — same seeded shape,
+different DB and run from the timed medians, so it illustrates hold
+magnitude and pins the one-txn-per-op structure but never decomposes a
+median; cold holds are UNMEASURED — never sampled, with no claim they
+equal warm holds) and `blocking` (functional two-connection
+WAL probe, no timing — a held `BEGIN IMMEDIATE` still lets readonly
+deferred/SHARED reads proceed while a second `BEGIN IMMEDIATE` with
+`busy_timeout=0` fails fast with `SQLITE_BUSY`; production retries 5s, the
+probe observes the signal without waiting). All writable-mode Ledger
+transactions take `RESERVED`, reads included, so writable reads serialize
+like writes; only readonly reads proceed concurrently.
+
+Coverage additions (current vs added enumerated in the script header): timed
+`expanded_refs_v1`, `inspect_capture`, `doctor` (each warm+cold),
+`capture_dry_run`, `capture_replay`, `capture_supersedes`, and
+`import_nonempty_refusal` (expected `CONFLICT`, required — success throws);
+cost+hold for the same set except doctor (internal SQL bypasses the `Store`
+port, so no Store-method counts — its hold is recorded via a one-call
+transaction proxy with the same post-`BEGIN` clock), plus `capture_batch_20`
+and `import_empty` (fresh-DB pristine-base restore). `env` now records git
+revision identity (HEAD commit resolved from the harness checkout, never
+caller CWD, plus a dirty flag and a sha256 over the tracked `git diff
+HEAD` excluding `docs/validation.md` — the file recording the hash, so
+the record cannot move the value — plus worktree status names and sorted
+untracked-file bytes, reproducible via `--print-identity`; or
+unknown-with-reason outside git) and the SQLite version. Timed medians
+stay the robust latency readings; each `txn_ms` is an unpaired single
+sample, not a hold share of any median.
+Bytes stay UTF-8 bytes; no token estimates.
+
+Remaining follow-ups move to the next slice: workload-specific budgets from
+the measured baseline and the ship/defer report. SQL-statement /
+SQLite-rows-examined counting stays open.
