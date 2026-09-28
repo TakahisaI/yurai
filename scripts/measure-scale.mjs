@@ -58,7 +58,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
-import { CountingStore, Ledger, ScanCollector, SqliteStore } from '../dist/index.js';
+import { Ledger, SqliteStore } from '../dist/index.js';
+import { CountingStore, ScanCollector } from '../dist/core/observe.js';
 
 if (typeof globalThis.gc !== 'function' && !process.argv.includes('--print-identity')) {
   console.error('measure-scale: rerun as `node --expose-gc scripts/measure-scale.mjs`; heap deltas need GC control.');

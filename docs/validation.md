@@ -81,5 +81,27 @@ This does not claim a clean `npm ci` succeeded in that local environment. Clean 
 ## Unverified / unimplemented
 
 Node 24, macOS, and Windows were verified on CI above, not in that local environment.
-Real-world use, parallel-process races, crash durability, and large-ledger performance are unverified.
-Nothing here tests source-content matching, reachability, or correctness of research findings. Fixtures are synthetic.
+
+Updated 2026-09-28 — what the regression tests now cover, and what is still open:
+
+- Parallel-process races: covered by `test/concurrency.test.mjs` (six
+  concurrent CLI captures all persist; same `request_id` replay without
+  duplication; conflicting content conflicts exactly once per loser; a
+  writer exceeding the busy timeout fails without partial writes).
+- Crash durability: covered by `test/crash.test.mjs` (a SIGKILLed mid-write
+  helper leaves no partial records, links, index rows, or receipts;
+  committed rows survive the same harness). Kill-during-checkpoint and
+  OS-level crash injection are not covered.
+- Source-content matching: covered for explicitly provided local files only.
+  `test/ledger.test.mjs` pins the `match` / `mismatch` / `multiple` /
+  `unreachable` outcomes, affix disambiguation, verbatim-vs-normalized
+  matching, and the separation of adopted, match, and preservation states;
+  `test/cli.test.mjs` covers the `verify` command end to end (missing file
+  → `unreachable`, oversize and non-UTF-8 input rejected). Network
+  retrieval, remote reachability, and edition/hash mismatch against a live
+  source are untested.
+- Real-world use is unverified: dogfooding with real consultations is in
+  progress (issue #18) but not finished.
+- Large-ledger performance beyond the synthetic scale measurements above is
+  unverified.
+- Nothing here tests correctness of research findings. Fixtures are synthetic.

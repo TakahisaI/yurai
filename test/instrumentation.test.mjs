@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CountingStore, Ledger, ScanCollector, SqliteStore } from '../dist/index.js';
+import { Ledger, SqliteStore } from '../dist/index.js';
+import { CountingStore, ScanCollector } from '../dist/core/observe.js';
 
 // Assess-only Core hooks (#44): exact Store-method-call / returned-row /
 // Ledger-scan counts on a synthetic fixture, plus behavior parity proving the
