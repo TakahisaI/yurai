@@ -223,6 +223,26 @@ test('CLI --readonly serves reads and refuses writes without touching bytes', t 
   assert.match(review.stderr, /READONLY/);
   assert.deepEqual(readFileSync(db), before);
 });
+test('CLI pages expanded match paths independently of the claim page', t => {
+  const { run } = setup(t);
+  assert.equal(run(['init']).status, 0);
+  assert.equal(run(['capture', '--file', 'examples/eval/ledger.json']).status, 0);
+  assert.equal(run(['capture', '--file', 'examples/eval/ledger-wd-deps.json']).status, 0);
+  const first = JSON.parse(run(['search', '38℃', '--expand', 'evidence', '--path-limit', '1']).stdout);
+  const item = first.items.find(v => v.entry.id === 'clm_eval_all');
+  assert.equal(item.total_paths, 2);
+  assert.equal(item.via.length, 1);
+  assert.equal(item.via_next_offset, 1);
+  const second = JSON.parse(run(['search', '38℃', '--expand', 'evidence', '--path-limit', '1', '--path-offset', '1']).stdout);
+  const rest = second.items.find(v => v.entry.id === 'clm_eval_all');
+  assert.equal(rest.via.length, 1);
+  assert.equal(rest.via_next_offset, null);
+  assert.equal(rest.paths_truncated, true);
+  assert.notEqual(item.via[0].assessment.entry.id, rest.via[0].assessment.entry.id);
+  const bad = run(['search', '38℃', '--path-limit', '1']);
+  assert.equal(bad.status, 2);
+  assert.match(bad.stderr, /path paging/);
+});
 test('CLI rejects init --readonly as contradictory', t => {
   const { run } = setup(t);
   const out = run(['init', '--readonly']);

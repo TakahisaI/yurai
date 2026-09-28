@@ -14,6 +14,7 @@ const help = `yurai — a local ledger of claims and their grounds
   yurai add --file record.json [--actor ID] [--actor-kind human|agent|import]
   yurai review ID --state accepted|rejected|withdrawn|proposed --reason TEXT
   yurai search QUERY [--kind claim|source] [--include-inactive] [--expand evidence]
+                 [--path-limit L] [--path-offset O]
   yurai show ID [--limit 20] [--offset 0]
   yurai show --request-id ID [--limit 20] [--offset 0]
   yurai verify EVIDENCE_ID --file PATH [--edition LABEL] [--method verbatim|normalized]
@@ -24,6 +25,8 @@ const help = `yurai — a local ledger of claims and their grounds
 
 Global: --db PATH, --actor ID, --actor-kind KIND, --request-id ID,
         --limit 1..100, --offset N, --readonly, --help
+Expanded search pages match paths per claim with --path-limit (default: --limit)
+and --path-offset; via_next_offset continues truncated paths.
 File '-' reads stdin. Output is JSON; errors go to stderr.
 Accepted means retained after review, NOT established as true.
 Source URIs are stored only: no network access or model calls.
@@ -61,6 +64,7 @@ try {
       'actor-kind': { type: 'string' }, 'request-id': { type: 'string' }, kind: { type: 'string' },
       state: { type: 'string' }, reason: { type: 'string' }, edition: { type: 'string' }, method: { type: 'string' },
       limit: { type: 'string' }, offset: { type: 'string' },
+      'path-limit': { type: 'string' }, 'path-offset': { type: 'string' },
       'dry-run': { type: 'boolean' }, 'include-inactive': { type: 'boolean' }, expand: { type: 'string' }, readonly: { type: 'boolean' }, help: { type: 'boolean', short: 'h' } } });
   const [command, arg] = args;
   if (v.help || !command) { process.stdout.write(help); }
@@ -71,7 +75,7 @@ try {
     const allowed: Record<string, string[]> = {
       init: [], capture: ['file','dry-run'], add: ['file','actor','actor-kind','request-id','dry-run'],
       review: ['state','reason','actor','actor-kind','request-id','dry-run'],
-      search: ['kind','limit','offset','include-inactive','expand'], show: ['limit','offset','request-id'],
+      search: ['kind','limit','offset','include-inactive','expand','path-limit','path-offset'], show: ['limit','offset','request-id'],
       verify: ['file','edition','method','actor','actor-kind','request-id','dry-run'],
       export: [], import: ['file'], doctor: [], schema: [] };
     for (const key of Object.keys(v)) if (!['db','help','readonly'].includes(key) && !allowed[command]!.includes(key)) usage(`--${key} is not valid for ${command}`);
@@ -104,7 +108,9 @@ try {
           if (v.expand !== undefined && v.expand !== 'evidence') usage('--expand must be evidence');
           if (v.kind === 'source' && v.expand !== undefined) usage('--expand routes to claims only');
           result = ledger.search(arg!, { kind: v.kind === 'source' ? 'source' : 'claim', limit: Number(v.limit ?? 20), offset: Number(v.offset ?? 0),
-            includeInactive: v['include-inactive'] ?? false, ...(v.expand === undefined ? {} : { expand: 'evidence' as const }) }); break;
+            includeInactive: v['include-inactive'] ?? false, ...(v.expand === undefined ? {} : { expand: 'evidence' as const }),
+            ...(v['path-limit'] === undefined ? {} : { pathLimit: Number(v['path-limit']) }),
+            ...(v['path-offset'] === undefined ? {} : { pathOffset: Number(v['path-offset']) }) }); break;
         case 'show':
           result = v['request-id'] !== undefined
             ? ledger.inspectCapture(v['request-id'], Number(v.limit ?? 20), Number(v.offset ?? 0))
