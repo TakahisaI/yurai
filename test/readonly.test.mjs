@@ -1,5 +1,5 @@
 import test from 'node:test';
-import assert from 'node:assert/strict';
+import assert, { AssertionError } from 'node:assert/strict';
 import { mkdtempSync, rmSync, readFileSync, readdirSync, chmodSync, openSync, closeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -128,13 +128,22 @@ test('readonly open works on read-only files; writable writes fail', t => {
   assert.equal(new Ledger(store).search('架空').items.length, 2);
   s.close(store);
   // SQLite may fall back to a read-only connection when read-write access is
-  // unavailable, so the failure surfaces on the first write, not open.
-  const writable = new SqliteStore(s.path);
-  assert.throws(() => new Ledger(writable).capture(bundle2('req_perm', 'clm_perm')));
-  writable.close();
-  // Restore before the seed hook removes the directory (Windows refuses
-  // to remove read-only files).
-  chmodSync(s.path, 0o644);
+  // unavailable (failure on first write), or refuse the open itself; either
+  // is valid enforcement.
+  try {
+    const writable = new SqliteStore(s.path);
+    try {
+      assert.throws(() => new Ledger(writable).capture(bundle2('req_perm', 'clm_perm')));
+    } finally {
+      writable.close();
+    }
+  } catch (error) {
+    if (error instanceof AssertionError) throw error;
+  } finally {
+    // Restore before the seed hook removes the directory (Windows refuses
+    // to remove read-only files).
+    chmodSync(s.path, 0o644);
+  }
   assert.deepEqual(s.snapshot(), before);
 });
 test('readonly readers see committed WAL frames and later commits', t => {
