@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "request_id": "req_jt_states_v1",
+  "actor": {
+    "kind": "agent",
+    "id": "trial-agent"
+  },
+  "entries": [
+    {
+      "id": "rev_jt_accept_cond",
+      "type": "review",
+      "data": {
+        "target_id": "clm_jt_conditional",
+        "state": "accepted",
+        "rationale": "Retain the as-recorded conditional judgment; acceptance is a retention decision, not truth or current endorsement."
+      }
+    },
+    {
+      "id": "rev_jt_accept_cond_v2",
+      "type": "review",
+      "data": {
+        "target_id": "clm_jt_conditional_v2",
+        "state": "accepted",
+        "rationale": "Retain the revisited conclusion alongside the old one; supersedes alone changed no state."
+      }
+    },
+    {
+      "id": "rev_jt_accept_flow",
+      "type": "review",
+      "data": {
+        "target_id": "clm_jt_flow_ok",
+        "state": "accepted",
+        "rationale": "Retain the joint-premise conclusion with its warrant; acceptance does not verify the fictional bench figures."
+      }
+    }
+  ]
+}

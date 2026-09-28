@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "request_id": "req_jt_revisit_v1",
+  "actor": {
+    "kind": "agent",
+    "id": "trial-agent"
+  },
+  "entries": [
+    {
+      "id": "evd_jt_cost_jan_fixed",
+      "type": "evidence",
+      "data": {
+        "source_id": "src_jt_cost",
+        "quote": "January 2 a.m. run cost, corrected: 47,000 fictional credits per night (fictional).",
+        "locator": "Fictional memo, January line (corrected figure)"
+      }
+    },
+    {
+      "id": "clm_jt_conditional_v2",
+      "type": "claim",
+      "data": {
+        "text": "Keep the NB-7 2 a.m. run through March, provided February ridership stays above 12 riders per run and a February cost review accepts the higher January baseline.",
+        "kind": "inference",
+        "attributed_to": "trial-agent",
+        "scope": "Revisits clm_jt_conditional after the January cost correction. Source-record set (exact grounds): evd_jt_riders_jan, evd_jt_cost_jan_fixed; evd_jt_cost_jan was withdrawn by the correction and is no longer a ground. The February condition remains unchecked. Judgment recorded in capture req_jt_revisit_v1; the as-recorded content of clm_jt_conditional is unchanged.",
+        "why": "Explicit revisit judgment. The old conclusion is not auto-reversed: its own state moves only through an explicit Review."
+      }
+    },
+    {
+      "id": "asm_jt_v2_riders",
+      "type": "assessment",
+      "data": {
+        "claim_id": "clm_jt_conditional_v2",
+        "evidence_id": "evd_jt_riders_jan",
+        "stance": "supports",
+        "rationale": "The January average of 14 still supports the keep side of the revisited conclusion as baseline demand; it does not satisfy the February condition, which remains unchecked."
+      }
+    },
+    {
+      "id": "asm_jt_v2_cost",
+      "type": "assessment",
+      "data": {
+        "claim_id": "clm_jt_conditional_v2",
+        "evidence_id": "evd_jt_cost_jan_fixed",
+        "stance": "qualifies",
+        "rationale": "The corrected January cost (47,000) raises the baseline; still no stated ceiling, so cost limits rather than settles."
+      }
+    },
+    {
+      "id": "rel_jt_v2_supersedes",
+      "type": "relation",
+      "data": {
+        "from_claim_id": "clm_jt_conditional_v2",
+        "to_claim_id": "clm_jt_conditional",
+        "relation": "supersedes",
+        "rationale": "Explicit revisit after the cost correction; history is preserved and the old record is not rewritten."
+      }
+    },
+    {
+      "id": "rev_jt_cost_old",
+      "type": "review",
+      "data": {
+        "target_id": "evd_jt_cost_jan",
+        "state": "withdrawn",
+        "rationale": "The January cost figure was mistranscribed; the corrected figure is evd_jt_cost_jan_fixed with asm_jt_v2_cost."
+      }
+    }
+  ]
+}

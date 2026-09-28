@@ -1,0 +1,112 @@
+{
+  "version": 1,
+  "request_id": "req_jt_joint_v1",
+  "actor": {
+    "kind": "agent",
+    "id": "trial-agent"
+  },
+  "entries": [
+    {
+      "id": "src_jt_pumploop",
+      "type": "source",
+      "data": {
+        "title": "Fictional pump-and-loop bench notes (synthetic)",
+        "medium": "experiment",
+        "uri": "urn:yurai:synthetic:jt-pumploop:v1",
+        "version": "v1-synthetic",
+        "note": "Entirely invented fixture for the issue-39 joint-premise trial."
+      }
+    },
+    {
+      "id": "evd_jt_pump",
+      "type": "evidence",
+      "data": {
+        "source_id": "src_jt_pumploop",
+        "quote": "Pump P held 44 L/min for 10 minutes (fictional).",
+        "locator": "Fictional bench notes, pump page"
+      }
+    },
+    {
+      "id": "evd_jt_loop",
+      "type": "evidence",
+      "data": {
+        "source_id": "src_jt_pumploop",
+        "quote": "Loop L is rated for 40 L/min continuous (fictional).",
+        "locator": "Fictional bench notes, loop page"
+      }
+    },
+    {
+      "id": "clm_jt_pump_ok",
+      "type": "claim",
+      "data": {
+        "text": "Pump P delivers at least 40 L/min.",
+        "kind": "assertion",
+        "attributed_to": "fictional-bench-operator",
+        "scope": "Fictional bench run only.",
+        "why": "Joint premise 1 of 2 for clm_jt_flow_ok; insufficient alone."
+      }
+    },
+    {
+      "id": "clm_jt_loop_ok",
+      "type": "claim",
+      "data": {
+        "text": "Loop L handles at least 40 L/min continuous.",
+        "kind": "assertion",
+        "attributed_to": "fictional-bench-operator",
+        "scope": "Fictional bench notes rating only.",
+        "why": "Joint premise 2 of 2 for clm_jt_flow_ok; insufficient alone."
+      }
+    },
+    {
+      "id": "asm_jt_pump",
+      "type": "assessment",
+      "data": {
+        "claim_id": "clm_jt_pump_ok",
+        "evidence_id": "evd_jt_pump",
+        "stance": "reports",
+        "rationale": "The notes state the pump reading; no judgment about loop readiness is made here."
+      }
+    },
+    {
+      "id": "asm_jt_loop",
+      "type": "assessment",
+      "data": {
+        "claim_id": "clm_jt_loop_ok",
+        "evidence_id": "evd_jt_loop",
+        "stance": "reports",
+        "rationale": "The notes state the loop rating; no judgment about pump delivery is made here."
+      }
+    },
+    {
+      "id": "clm_jt_flow_ok",
+      "type": "claim",
+      "data": {
+        "text": "Loop test T can run at 40 L/min for ten minutes.",
+        "kind": "inference",
+        "attributed_to": "trial-agent",
+        "scope": "Warrant: clm_jt_pump_ok AND clm_jt_loop_ok jointly. Neither premise alone warrants the flow rate: pump capacity without the loop rating, or the loop rating without pump capacity, leaves the conclusion unsupported. Source-record set (exact grounds): evd_jt_pump, evd_jt_loop. This set is not the capture membership: membership is every record in capture req_jt_joint_v1, inspectable via show --request-id. Duration bound: the pump passage warrants ten minutes at up to 44 L/min, so this conclusion covers a ten-minute run at 40 L/min only, not continuous operation. Judgment recorded in capture req_jt_joint_v1.",
+        "why": "Test-readiness answer for fictional loop test T; recall must show both premises together, never one as independent proof."
+      }
+    },
+    {
+      "id": "rel_jt_joint_pump",
+      "type": "relation",
+      "data": {
+        "from_claim_id": "clm_jt_pump_ok",
+        "to_claim_id": "clm_jt_flow_ok",
+        "relation": "related",
+        "rationale": "Joint premise 1 of 2; contributes only together with clm_jt_loop_ok. See the conclusion scope for the warrant. Deliberately not supports: the premise alone proves nothing about test readiness."
+      }
+    },
+    {
+      "id": "rel_jt_joint_loop",
+      "type": "relation",
+      "data": {
+        "from_claim_id": "clm_jt_loop_ok",
+        "to_claim_id": "clm_jt_flow_ok",
+        "relation": "related",
+        "rationale": "Joint premise 2 of 2; contributes only together with clm_jt_pump_ok. See the conclusion scope for the warrant. Deliberately not supports: the premise alone proves nothing about test readiness."
+      }
+    }
+  ]
+}

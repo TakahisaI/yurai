@@ -1,0 +1,156 @@
+{
+  "version": 1,
+  "request_id": "req_jt_conditional_v1",
+  "actor": {
+    "kind": "agent",
+    "id": "trial-agent"
+  },
+  "entries": [
+    {
+      "id": "src_jt_ridership",
+      "type": "source",
+      "data": {
+        "title": "Fictional night-bus ridership sheet NB-7 (synthetic)",
+        "medium": "dataset",
+        "uri": "urn:yurai:synthetic:jt-ridership:v1",
+        "version": "v1-synthetic",
+        "note": "Entirely invented fixture for the issue-39 trial. No retrievable external source is asserted."
+      }
+    },
+    {
+      "id": "src_jt_cost",
+      "type": "source",
+      "data": {
+        "title": "Fictional NB-7 operating-cost memo (synthetic)",
+        "medium": "document",
+        "uri": "urn:yurai:synthetic:jt-cost:v1",
+        "version": "v1-synthetic",
+        "note": "Entirely invented fixture for the issue-39 trial. No retrievable external source is asserted."
+      }
+    },
+    {
+      "id": "evd_jt_riders_jan",
+      "type": "evidence",
+      "data": {
+        "source_id": "src_jt_ridership",
+        "quote": "January 2 a.m. runs averaged 14 riders per run, steady against the prior three months at 13-15 (fictional).",
+        "locator": "Fictional sheet NB-7, January row"
+      }
+    },
+    {
+      "id": "evd_jt_cost_jan",
+      "type": "evidence",
+      "data": {
+        "source_id": "src_jt_cost",
+        "quote": "January 2 a.m. run cost: 41,000 fictional credits per night (fictional).",
+        "locator": "Fictional memo, January line"
+      }
+    },
+    {
+      "id": "clm_jt_question",
+      "type": "claim",
+      "data": {
+        "text": "Should night-bus route NB-7 keep its 2 a.m. run through March?",
+        "kind": "hypothesis",
+        "attributed_to": "trial-user",
+        "scope": "Fictional March timetable decision only.",
+        "why": "The question this judgment trail answers, recorded as the user's question rather than a finding."
+      }
+    },
+    {
+      "id": "clm_jt_purpose",
+      "type": "claim",
+      "data": {
+        "text": "The March timetable decision needs a keep-or-cut answer for the NB-7 2 a.m. run.",
+        "kind": "assertion",
+        "attributed_to": "trial-user",
+        "scope": "Use purpose stated by the user for this judgment only.",
+        "why": "Records why the conclusion mattered, so later reuse can check whether the purpose still fits."
+      }
+    },
+    {
+      "id": "clm_jt_sufficient",
+      "type": "claim",
+      "data": {
+        "text": "An answer counts as sufficient for the March decision when January ridership and January operating cost for the 2 a.m. run are both on record.",
+        "kind": "assertion",
+        "attributed_to": "trial-user",
+        "scope": "The user's stated sufficiency criterion for this decision only; not a universal proof threshold.",
+        "why": "Pins what 'enough to decide' meant at judgment time, as the user's attributed judgment."
+      }
+    },
+    {
+      "id": "clm_jt_conditional",
+      "type": "claim",
+      "data": {
+        "text": "Keep the NB-7 2 a.m. run through March, provided February ridership stays above 12 riders per run.",
+        "kind": "inference",
+        "attributed_to": "trial-agent",
+        "scope": "Conditional: applies only while the February average stays above 12 riders per run. Only January figures are on record (evd_jt_riders_jan, evd_jt_cost_jan). Judgment recorded in capture req_jt_conditional_v1.",
+        "why": "Answers clm_jt_question for the purpose in clm_jt_purpose; meets the sufficiency criterion in clm_jt_sufficient because both January figures are on record."
+      }
+    },
+    {
+      "id": "asm_jt_cond_riders",
+      "type": "assessment",
+      "data": {
+        "claim_id": "clm_jt_conditional",
+        "evidence_id": "evd_jt_riders_jan",
+        "stance": "supports",
+        "rationale": "The January average of 14 supports the keep side of the conclusion as baseline demand; it does not satisfy the February condition, which remains unchecked (see clm_jt_reservation_feb)."
+      }
+    },
+    {
+      "id": "asm_jt_cond_cost",
+      "type": "assessment",
+      "data": {
+        "claim_id": "clm_jt_conditional",
+        "evidence_id": "evd_jt_cost_jan",
+        "stance": "qualifies",
+        "rationale": "January cost is on record but no cost ceiling was stated, so cost limits rather than settles the conclusion."
+      }
+    },
+    {
+      "id": "clm_jt_reservation_feb",
+      "type": "claim",
+      "data": {
+        "text": "February ridership and cost are not on record, so the February condition is unchecked and the conclusion may not hold.",
+        "kind": "hypothesis",
+        "attributed_to": "trial-agent",
+        "scope": "Reservation on clm_jt_conditional; unresolved at judgment time.",
+        "why": "Keeps the open condition visible on recall instead of letting the conclusion read as unconditional."
+      }
+    },
+    {
+      "id": "rel_jt_cond_reservation",
+      "type": "relation",
+      "data": {
+        "from_claim_id": "clm_jt_reservation_feb",
+        "to_claim_id": "clm_jt_conditional",
+        "relation": "qualifies",
+        "rationale": "Unresolved objection: the February condition has no grounding passage yet."
+      }
+    },
+    {
+      "id": "clm_jt_nohit_note",
+      "type": "claim",
+      "data": {
+        "text": "A ledger search for February NB-7 figures returned no hits; this is absence of record, not proof that no counterevidence exists.",
+        "kind": "inference",
+        "attributed_to": "trial-agent",
+        "scope": "Search-scope note for this judgment only; covers the ledger searched, not the world.",
+        "why": "Prevents a later reader from relabeling missing hits as proof of no counterevidence."
+      }
+    },
+    {
+      "id": "rel_jt_nohit_qualifies",
+      "type": "relation",
+      "data": {
+        "from_claim_id": "clm_jt_nohit_note",
+        "to_claim_id": "clm_jt_conditional",
+        "relation": "qualifies",
+        "rationale": "The conclusion rests on January figures plus an unchecked February condition; the empty February search is a limit, not support."
+      }
+    }
+  ]
+}
