@@ -129,16 +129,19 @@ test('readonly open works on read-only files; writable writes fail', t => {
   s.close(store);
   // SQLite may fall back to a read-only connection when read-write access is
   // unavailable (failure on first write), or refuse the open itself; either
-  // is valid enforcement.
+  // is valid enforcement, but only with SQLite's own permission/open wording
+  // so unrelated regressions cannot slip through.
+  const denied = e => e instanceof Error && /readonly database|unable to open/i.test(e.message);
   try {
     const writable = new SqliteStore(s.path);
     try {
-      assert.throws(() => new Ledger(writable).capture(bundle2('req_perm', 'clm_perm')));
+      assert.throws(() => new Ledger(writable).capture(bundle2('req_perm', 'clm_perm')), denied);
     } finally {
       writable.close();
     }
   } catch (error) {
     if (error instanceof AssertionError) throw error;
+    assert.ok(denied(error), `expected a permission/open refusal, got: ${error}`);
   } finally {
     // Restore before the seed hook removes the directory (Windows refuses
     // to remove read-only files).
