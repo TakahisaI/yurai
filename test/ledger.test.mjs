@@ -709,7 +709,8 @@ test('expanded discovery pages match paths independently with deterministic cont
   const { ledger } = setup(t);
   const entries = [
     { id: 'src_p', type: 'source', data: { title: 'synthetic paging', medium: 'note', uri: 'urn:yurai:synthetic:p' } },
-    { id: 'clm_p', type: 'claim', data: { text: 'paged routes', kind: 'assertion', attributed_to: 'test' } }];
+    { id: 'clm_p', type: 'claim', data: { text: 'paged routes', kind: 'assertion', attributed_to: 'test' } },
+    { id: 'clm_pd', type: 'claim', data: { text: 'QPQ direct only', kind: 'assertion', attributed_to: 'test' } }];
   for (const [suffix, text] of [['a', 'QPQ alpha'], ['b', 'QPQ beta'], ['c', 'QPQ gamma']])
     entries.push({ id: `evd_p${suffix}`, type: 'evidence', data: { source_id: 'src_p', quote: text } });
   entries.push(
@@ -739,6 +740,13 @@ test('expanded discovery pages match paths independently with deterministic cont
   const coupled = ledger.search('QPQ', { expand: 'evidence', limit: 2 });
   assert.equal(coupled.items.find(v => v.entry.id === 'clm_p').via.length, 2);
   assert.equal(coupled.items.find(v => v.entry.id === 'clm_p').via_next_offset, 2);
+  const directOnly = ledger.search('QPQ', { expand: 'evidence', limit: 20, pathOffset: 2 });
+  const bare = directOnly.items.find(v => v.entry.id === 'clm_pd');
+  assert.equal(bare.direct_match, true);
+  assert.equal(bare.total_paths, 0);
+  assert.deepEqual(bare.via, []);
+  assert.equal(bare.paths_truncated, false);
+  assert.equal(bare.via_next_offset, null);
   assert.throws(() => ledger.search('QPQ', { pathLimit: 2 }), code('VALIDATION'));
   assert.throws(() => ledger.search('QPQ', { expand: 'evidence', pathLimit: 0 }), code('VALIDATION'));
   assert.throws(() => ledger.search('QPQ', { expand: 'evidence', pathLimit: 101 }), code('VALIDATION'));
