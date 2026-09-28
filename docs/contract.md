@@ -59,6 +59,9 @@ skipped-readonly` because the FTS self-check is a write; writable doctor reports
 Opening a WAL-mode ledger may still create `-shm`/`-wal` sidecars; the guarantee covers
 main-file bytes and WAL content, not the transient shared-memory index.
 search/show limit defaults to 20, max 100. offset is 0–1,000,000. next_offset=null ends that search/connection page.
+Responses carry `revision`, the current ledger change marker. Repeating a paged
+read with `--as-of REV` fails with CONFLICT when the ledger changed since that
+revision, so callers restart instead of skipping or duplicating rows.
 Search terms allow up to 500 chars and 16 whitespace-separated terms. FTS OR/NOT and SQL wildcards are not interpreted.
 
 ## Expanded discovery
@@ -78,9 +81,9 @@ later paths fall outside it, so `false` always means `via` is complete. The per-
 independent of the claim page: `--path-limit` (1..100, default: `--limit`)
 and `--path-offset` page it, with `via_next_offset` continuing truncated
 paths to their end. Paths order deterministically by Assessment recency,
-then Evidence ID, then Assessment ID; paging assumes a quiescent ledger,
-since an intervening
-write can shift newest-first positions (revision binding is later work).
+then Evidence ID, then Assessment ID. An intervening write can shift
+newest-first positions, so path pages bind with `--as-of` exactly like claim
+pages: pass the first page's `revision` and a changed ledger fails explicitly.
 `via` holds lexical matching paths only; `show` pages all inspected grounds.
 Claims page by newest first with the usual `next_offset`; ties on recorded
 time break by ascending ID, so same-capture direct matches may order
@@ -135,12 +138,13 @@ reopen instead of migrating.
 
 ## Inspecting one capture
 
-`show --request-id REQUEST_ID [--limit N] [--offset N]` selects a persisted receipt;
+`show --request-id REQUEST_ID [--limit N] [--offset N] [--as-of REV]` selects a persisted receipt;
 it cannot be combined with a positional record ID. Core exposes
-`Ledger.inspectCapture(requestId, limit = 20, offset = 0)`. Existing `show ID`
-behavior is unchanged, and schema/Store contracts remain v1.
+`Ledger.inspectCapture(requestId, limit = 20, offset = 0, asOf?)`. Existing `show ID`
+behavior is unchanged. The schema contract remains v1; the Store contract is v2,
+adding `revision()` so paged reads can bind with `--as-of`.
 
-Returns `request_id`, `digest`, `total`, `items`, `next_offset`,
+Returns `request_id`, `digest`, `total`, `items`, `next_offset`, `revision`,
 `states_as_of: "inspection"`, and `truth_evaluated: false`. Each item includes its
 original entry, current review/state/warnings, direct references, and the Source
 of referenced Evidence. Items follow the receipt's original ID order; inactive

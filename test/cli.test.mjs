@@ -243,6 +243,24 @@ test('CLI pages expanded match paths independently of the claim page', t => {
   assert.equal(bad.status, 2);
   assert.match(bad.stderr, /path paging/);
 });
+test('CLI --as-of restarts paged reads after a write', t => {
+  const { dir, run } = setup(t);
+  assert.equal(run(['init']).status, 0);
+  assert.equal(run(['capture', '--file', 'examples/capture.json']).status, 0);
+  const first = JSON.parse(run(['search', '架空', '--limit', '1']).stdout);
+  assert.equal(typeof first.revision, 'number');
+  const rec = join(dir, 'rec.json');
+  writeFileSync(rec, JSON.stringify({ id: 'clm_asof', type: 'claim',
+    data: { text: '架空の追加', kind: 'assertion', attributed_to: 't' } }));
+  assert.equal(run(['add', '--file', rec]).status, 0);
+  const stale = run(['search', '架空', '--limit', '1', '--offset', '1', '--as-of', String(first.revision)]);
+  assert.equal(stale.status, 4);
+  assert.match(stale.stderr, /restart/);
+  const fresh = JSON.parse(run(['search', '架空', '--limit', '1', '--offset', '1']).stdout);
+  assert.notEqual(fresh.revision, first.revision);
+  const bad = run(['search', '架空', '--as-of', 'nope']);
+  assert.equal(bad.status, 2);
+});
 test('CLI rejects init --readonly as contradictory', t => {
   const { run } = setup(t);
   const out = run(['init', '--readonly']);

@@ -190,6 +190,7 @@ export class SqliteStore implements Store {
     this.db.prepare('INSERT INTO receipts(request_id,digest,ids) VALUES(?,?,?)').run(r.request_id, r.digest, JSON.stringify(r.ids));
   }
   count(): number { return Number(this.db.prepare('SELECT count(*) AS n FROM records').get()?.n); }
+  revision(): number { return Number(this.db.prepare('SELECT COALESCE(MAX(seq), 0) AS n FROM records').get()?.n); }
   doctor() {
     return this.transaction(() => this.check());
   }
