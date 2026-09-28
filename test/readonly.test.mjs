@@ -1,6 +1,6 @@
 import test from 'node:test';
-import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, readFileSync, readdirSync } from 'node:fs';
+import assert, { AssertionError } from 'node:assert/strict';
+import { mkdtempSync, rmSync, readFileSync, readdirSync, chmodSync, openSync, closeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -112,3 +112,93 @@ test('doctor works readonly with the skipped FTS self-check stated', t => {
   assert.equal(report.fts_integrity, 'skipped-readonly');
   assert.equal(s.open(false).doctor().fts_integrity, 'checked');
 });
+test('readonly open works on read-only files; writable writes fail', t => {
+  const s = seed(t);
+  const before = s.snapshot();
+  chmodSync(s.path, 0o444);
+  try {
+    // Root and CAP_DAC_OVERRIDE bypass permission bits; without an enforced
+    // denial there is no write failure to assert.
+    closeSync(openSync(s.path, 'r+'));
+    chmodSync(s.path, 0o644);
+    t.skip('process can write despite read-only permission bits');
+    return;
+  } catch { /* permission enforced: proceed */ }
+  const store = s.open(true);
+  assert.equal(new Ledger(store).search('架空').items.length, 2);
+  s.close(store);
+  // SQLite may fall back to a read-only connection when read-write access is
+  // unavailable (failure on first write), or refuse the open itself; either
+  // is valid enforcement, but only with SQLite's own permission/open wording
+  // so unrelated regressions cannot slip through.
+  const denied = e => e instanceof Error && /readonly database|unable to open/i.test(e.message);
+  try {
+    const writable = new SqliteStore(s.path);
+    try {
+      assert.throws(() => new Ledger(writable).capture(bundle2('req_perm', 'clm_perm')), denied);
+    } finally {
+      writable.close();
+    }
+  } catch (error) {
+    if (error instanceof AssertionError) throw error;
+    assert.ok(denied(error), `expected a permission/open refusal, got: ${error}`);
+  } finally {
+    // Restore before the seed hook removes the directory (Windows refuses
+    // to remove read-only files).
+    chmodSync(s.path, 0o644);
+  }
+  assert.deepEqual(s.snapshot(), before);
+});
+test('readonly readers see committed WAL frames and later commits', t => {
+  const s = seed(t);
+  const writer = s.open(false);
+  const ledger = new Ledger(writer);
+  ledger.capture(bundle2('req_wal_1', 'clm_wal_1'));
+  const first = s.open(true);
+  assert.ok(new Ledger(first).search('WALTERM').items.some(i => i.entry.id === 'clm_wal_1'));
+  ledger.capture(bundle2('req_wal_2', 'clm_wal_2'));
+  const second = s.open(true);
+  const ids = new Ledger(second).search('WALTERM').items.map(i => i.entry.id);
+  assert.ok(ids.includes('clm_wal_1') && ids.includes('clm_wal_2'));
+  // The earlier reader must see the later commit too: reads never pin a
+  // snapshot across operations.
+  const firstAgain = new Ledger(first).search('WALTERM').items.map(i => i.entry.id);
+  assert.ok(firstAgain.includes('clm_wal_1') && firstAgain.includes('clm_wal_2'));
+  s.close(first);
+  s.close(second);
+});
+test('readonly and writable modes return identical read results', t => {
+  const s = seed(t);
+  const ro = new Ledger(s.open(true));
+  const rw = new Ledger(s.open(false));
+  for (const q of ['架空', '条件X']) {
+    assert.deepEqual(ro.search(q), rw.search(q));
+    assert.deepEqual(ro.search(q, { expand: 'evidence' }), rw.search(q, { expand: 'evidence' }));
+  }
+  assert.deepEqual(ro.show('clm_demo'), rw.show('clm_demo'));
+  const a = s.open(true).doctor();
+  const b = s.open(false).doctor();
+  assert.equal(a.ok, b.ok);
+  assert.equal(a.records, b.records);
+  assert.equal(a.search_index_consistent, b.search_index_consistent);
+});
+test('capture inspection works through the readonly path', t => {
+  const s = seed(t);
+  const writer = s.open(false);
+  new Ledger(writer).capture(bundle2('req_ro_inspect', 'clm_ro_inspect'));
+  s.close(writer);
+  const ledger = new Ledger(s.open(true));
+  const page = ledger.inspectCapture('req_synthetic_demo_v1', 20, 0);
+  assert.equal(page.total, 6);
+  assert.deepEqual(page.items.map(e => e.entry.id).sort(),
+    ['asm_demo', 'clm_demo', 'clm_limit', 'evd_demo', 'rel_limit', 'src_demo']);
+  const other = ledger.inspectCapture('req_ro_inspect', 20, 0);
+  assert.equal(other.total, 1);
+  assert.deepEqual(other.items.map(e => e.entry.id), ['clm_ro_inspect']);
+  assert.throws(() => ledger.inspectCapture('req_no_such_capture'), code('NOT_FOUND'));
+});
+function bundle2(request_id, id) {
+  return { version: 1, request_id, actor, entries: [
+    { id, type: 'claim', data: { text: 'WALTERM synthetic', kind: 'assertion', attributed_to: 't' } },
+  ] };
+}
