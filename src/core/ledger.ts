@@ -3,6 +3,7 @@ import { LedgerError, fail, matchedEvidenceFields, normalize, pageBounds, parseB
 import type { Actor, Entry, EvidenceField, Input, Snapshot, State } from './model.js';
 import type { Store } from './ports.js';
 import { MAX_VERIFY_BYTES, matchQuote } from './verify.js';
+import { toExpandedRefsV1 } from './refs.js';
 
 function canonical(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
@@ -175,7 +176,7 @@ export class Ledger {
         outcome: stored.data.outcome, verification: this.view(stored) };
     return null;
   }
-  search(query: string, options: { kind?: 'claim' | 'source'; limit?: number; offset?: number; includeInactive?: boolean; expand?: 'evidence'; pathLimit?: number; pathOffset?: number; asOf?: number } = {}) {
+  search(query: string, options: { kind?: 'claim' | 'source'; limit?: number; offset?: number; includeInactive?: boolean; expand?: 'evidence'; pathLimit?: number; pathOffset?: number; asOf?: number; projection?: 'refs-v1' } = {}) {
     const { kind = 'claim', limit = 20, offset = 0, includeInactive = false, expand } = options;
     const pathLimit = options.pathLimit === undefined ? limit : options.pathLimit;
     const pathOffset = options.pathOffset === undefined ? 0 : options.pathOffset;
@@ -185,6 +186,9 @@ export class Ledger {
     if (expand !== undefined && expand !== 'evidence') fail('VALIDATION', 'expand must be evidence');
     if (expand && kind !== 'claim') fail('VALIDATION', 'expanded discovery routes to claims only');
     if (!expand && (options.pathLimit !== undefined || options.pathOffset !== undefined)) fail('VALIDATION', 'path paging needs expand');
+    const projection: unknown = options.projection;
+    if (projection !== undefined && projection !== 'refs-v1') fail('VALIDATION', `unknown projection: ${String(projection)}`);
+    if (projection !== undefined && !expand) fail('VALIDATION', 'projection refs-v1 needs expand');
     if (typeof query !== 'string' || query.length > 500 || query.includes('\u0000')) fail('VALIDATION', 'invalid query');
     const tokens = normalize(query).trim().split(/\s+/u).filter(Boolean);
     if (!tokens.length || tokens.length > 16) fail('VALIDATION', 'query needs 1..16 literal terms');
@@ -192,7 +196,11 @@ export class Ledger {
     return this.store.transaction(() => {
       const revision = this.store.revision();
       if (options.asOf !== undefined && options.asOf !== revision) fail('CONFLICT', `ledger changed since revision ${options.asOf}; restart paging`);
-      if (expand) return this.expanded(tokens, includeInactive, limit, offset, query, pathLimit, pathOffset, revision);
+      if (expand) {
+        const inline = this.expanded(tokens, includeInactive, limit, offset, query, pathLimit, pathOffset, revision);
+        if (projection === 'refs-v1') return toExpandedRefsV1(inline, { offset, limit, path_offset: pathOffset, path_limit: pathLimit });
+        return inline;
+      }
       const rows = this.store.search(kind, tokens, includeInactive, limit + 1, offset);
       return { items: rows.slice(0, limit).map(e => this.view(e)), next_offset: rows.length > limit ? offset + limit : null,
         query, match: 'literal_terms_and', revision, truth_evaluated: false };
