@@ -1,4 +1,10 @@
 export { Ledger } from './core/ledger.js';
+export { canonicalReferences, isPlanStale, planPurge, planRedact, REDACT_SCOPE_NOTE,
+  sourceFingerprint, verifyPlanApproval, verifyPlanDigest } from './core/planPurge.js';
+export type { AffectedReceipt, DegradedDependent, DependentReason, PlanLimits, PlanSource, PlanStatus,
+  PurgeExpected, PurgeOptions, PurgePlan, RedactAffectedReceipt, RedactExpected, RedactOptions,
+  RedactPlan, RedactReason, RedactStateImpact, RefEdge, ReferenceResolver, ResolvedLimits,
+  StateTransition, TombstonePreview, ViaEdge } from './core/planPurge.js';
 export { toExpandedRefsV1 } from './core/refs.js';
 export type { ExpandedRefsResponse, RefsInlineResponse, RefsView, RefsWindow } from './core/refs.js';
 export { LedgerError, bundleSchema, inputSchema, snapshotSchema } from './core/model.js';
