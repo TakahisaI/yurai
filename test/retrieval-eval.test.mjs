@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { Ledger, SqliteStore } from '../dist/index.js';
 
 const ledger = JSON.parse(readFileSync(new URL('../examples/eval/ledger.json', import.meta.url), 'utf8'));
 const ledgerWdDeps = JSON.parse(readFileSync(new URL('../examples/eval/ledger-wd-deps.json', import.meta.url), 'utf8'));
+const ledgerVerify = JSON.parse(readFileSync(new URL('../examples/eval/ledger-verify.json', import.meta.url), 'utf8'));
 const queries = JSON.parse(readFileSync(new URL('../examples/eval/queries.json', import.meta.url), 'utf8'));
 
 function setup() {
@@ -12,6 +14,7 @@ function setup() {
   const ledgerApi = new Ledger(store);
   ledgerApi.capture(ledger);
   ledgerApi.capture(ledgerWdDeps);
+  ledgerApi.capture(ledgerVerify);
   return { store, ledgerApi };
 }
 
@@ -188,4 +191,67 @@ test('retrieval eval: withdrawn source path keeps full states on the audit path'
   assert.equal(item.via[0].evidence.state, 'proposed');
   assert.equal(item.via[0].assessment.state, 'proposed');
   assert.equal(item.via[0].source.state, 'withdrawn');
+});
+
+test('retrieval eval: routed paths preserve review, verification, and provenance', t => {
+  const { store, ledgerApi } = setup();
+  t.after(() => store.close());
+  const result = ledgerApi.search('38℃', { expand: 'evidence' });
+  const item = result.items.find(i => i.entry.id === 'clm_eval_xz7');
+  assert.ok(item);
+  // Attribution, scope, and motive survive on the routed claim, as does the recorder.
+  assert.equal(item.entry.data.attributed_to, 'fictional-experimenter');
+  assert.deepEqual(item.entry.actor, { kind: 'agent', id: 'fixture-agent' });
+  assert.ok(item.entry.data.scope.includes('XZ-7'));
+  assert.ok(item.entry.data.why.length > 0);
+  const path = item.via.find(v => v.evidence.entry.id === 'evd_eval_xz7');
+  assert.ok(path);
+  for (const side of [path.evidence, path.assessment, path.source]) {
+    assert.deepEqual(side.entry.actor, { kind: 'agent', id: 'fixture-agent' });
+  }
+  // The review and verification came from a later capture by a distinct
+  // recorder, so substitution with the claim actor cannot pass silently.
+  assert.deepEqual(path.assessment.review.actor, { kind: 'agent', id: 'fixture-verifier' });
+  assert.deepEqual(path.evidence.verification.actor, { kind: 'agent', id: 'fixture-verifier' });
+  // The verified anchor carries its verification summary and edition agreement.
+  assert.equal(path.evidence.verification.id, 'vrf_eval_xz7');
+  assert.equal(path.evidence.verification.outcome, 'match');
+  assert.equal(path.evidence.verification.edition.agreement, 'match');
+  assert.deepEqual(path.evidence.verification, ledgerApi.show('evd_eval_xz7').verification);
+  assert.ok(path.evidence.warnings.includes('anchor_match'));
+  assert.ok(!path.evidence.warnings.includes('anchor_not_verified'));
+  // The fixture verification is internally consistent: its pinned passage is
+  // exactly the stored quote, so verifyEvidence() could have produced it.
+  const pinned = ledgerApi.show('vrf_eval_xz7').entry.data;
+  const quote = path.evidence.entry.data.quote;
+  assert.equal(pinned.occurrences, 1);
+  assert.equal(pinned.byte_length, Buffer.byteLength(quote, 'utf8'));
+  assert.equal(pinned.passage_sha256, createHash('sha256').update(quote, 'utf8').digest('hex'));
+  // The accepted assessment carries its review, stance, and rationale.
+  assert.equal(path.assessment.state, 'accepted');
+  assert.equal(path.assessment.review.data.state, 'accepted');
+  assert.deepEqual(path.assessment.review, ledgerApi.show('asm_eval_xz7').review);
+  assert.equal(path.assessment.entry.data.stance, 'supports');
+  assert.ok(path.assessment.entry.data.rationale.includes('Table 2'));
+  // Provenance: the attached source is the evidence's own declared source.
+  assert.equal(path.source.entry.id, path.evidence.entry.data.source_id);
+  assert.equal(path.source.entry.data.version, 'v1');
+  // The same verified anchor on the opposing path keeps its summary while
+  // the two paths stay separate assessments.
+  const rival = result.items.find(i => i.entry.id === 'clm_eval_all');
+  assert.ok(rival);
+  const challenge = rival.via.find(v => v.evidence.entry.id === 'evd_eval_xz7');
+  assert.ok(challenge);
+  assert.equal(challenge.assessment.entry.id, 'asm_eval_all_challenge');
+  assert.equal(challenge.assessment.entry.data.stance, 'challenges');
+  assert.notEqual(challenge.assessment.entry.id, path.assessment.entry.id);
+  assert.equal(challenge.evidence.verification.outcome, 'match');
+  assert.deepEqual(challenge.evidence.verification, path.evidence.verification);
+  // The unverified sibling anchor still says so instead of borrowing coverage.
+  const drop = result.items.find(i => i.entry.id === 'clm_eval_drop');
+  assert.ok(drop);
+  const unverified = drop.via.find(v => v.evidence.entry.id === 'evd_eval_drop');
+  assert.ok(unverified);
+  assert.equal(unverified.evidence.verification, null);
+  assert.ok(unverified.evidence.warnings.includes('anchor_not_verified'));
 });
