@@ -268,6 +268,44 @@ per-ID), receipts, and registry digests as sets, plus a per-target
 Review/Verification event-order gate; bytewise SQLite-file equality is
 not required. See ADR 0008.
 
+When any retained item (a reference target ID, the record's own ID,
+actor, or timestamp) is itself sensitive, redact is refused whole —
+there is no implicit split — and the flow proposes a purge scope
+instead: the flagging records plus every record bearing a sensitive
+value (sensitivity is value-scoped) plus the transitive dependent
+closure, with affected receipts and registry additions shown in full.
+The purge executes only on a separate confirmation act bound to the
+issued proposal (proposal id plus computed-at echo, explicitly
+unbundled) and matching it exactly; the redact request never implies
+purge consent. Tombstone reasons stay enum-only markers and never copy
+the removed secret. See ADR 0013 (box 3).
+
+Registry lookup is registry-first on every admission path: capture
+consults validate → registry → receipt → references → write (a
+blocked request never replays, `verify` inherits the order whole,
+dry-run previews the refusal); restore consults validate →
+version gates → receipt/registry-conflict scan →
+tombstone/verification-backstop scan → write; merge admission
+consults validate → foreign-internal consistency → local registry
+(ledger-consistency scan, then the local request, then the paired
+shared-history re-supply check) → receipt → classification → remap
+last. A digest entry is the lowercase hex SHA-256 over the UTF-8
+bytes of one affected original `request_id`; a purge spanning
+several requests blocks every affected one. Purging a tombstone
+still blocks its redaction-dropped request: the operator supplies the
+redaction pre-delete export, each doomed tombstone must match an export
+entry on the retained envelope (id, type, actor, created_at) with a
+covering receipt, and a missing, incomplete, or mismatched
+artifact refuses the purge fail-closed — so a redact-then-purge
+sequence never re-admits the original bundle. Reports name only
+operator-supplied `request_id` strings, never digests or content.
+Deterministic digests leak the purge count plus membership for
+guessable `request_id` values, so privacy-sensitive captures and
+merge operations use unguessable `request_id` values. The merge plan
+step previews this same barrier sequence without writing; apply
+re-runs the registry phase inside its transaction. See ADR 0013
+(box 4).
+
 ## Merge retries vs origin receipts (proposed contract; no merge yet)
 
 Proposed future contract from ADR 0011 — not current behavior. `import`
@@ -306,7 +344,10 @@ recording awaits a bundle shape that the current receipts row cannot
 hold. See ADR 0011, including the
 PROVISIONAL register (P1–P11) for clauses awaiting #23 boxes 3–4
 decisions, a #23-owned tombstone-transfer decision, #31-final
-integration, or #32 selection mechanics.
+integration, or #32 selection mechanics. ADR 0013 has since supplied
+the #23-owned halves of P5 and P8 (registry-first precedence and
+paired shared-history lookup mechanics); the register itself still
+resolves at #31-final integration, which renumbers nothing.
 
 ## Snapshot
 
