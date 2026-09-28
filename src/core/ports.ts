@@ -1,5 +1,6 @@
 import type { Entry, Receipt } from './model.js';
-/** A synchronous local transaction boundary, not a general-purpose ORM. */
+/** A synchronous local transaction boundary, not a general-purpose ORM.
+ * Store contract v2: v1 plus revision() for --as-of paging binding. */
 export interface Store {
   transaction<T>(fn: () => T): T;
   get(id: string): Entry | undefined;

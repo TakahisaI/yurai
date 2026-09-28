@@ -138,12 +138,13 @@ reopen instead of migrating.
 
 ## Inspecting one capture
 
-`show --request-id REQUEST_ID [--limit N] [--offset N]` selects a persisted receipt;
+`show --request-id REQUEST_ID [--limit N] [--offset N] [--as-of REV]` selects a persisted receipt;
 it cannot be combined with a positional record ID. Core exposes
-`Ledger.inspectCapture(requestId, limit = 20, offset = 0)`. Existing `show ID`
-behavior is unchanged, and schema/Store contracts remain v1.
+`Ledger.inspectCapture(requestId, limit = 20, offset = 0, asOf?)`. Existing `show ID`
+behavior is unchanged. The schema contract remains v1; the Store contract is v2,
+adding `revision()` so paged reads can bind with `--as-of`.
 
-Returns `request_id`, `digest`, `total`, `items`, `next_offset`,
+Returns `request_id`, `digest`, `total`, `items`, `next_offset`, `revision`,
 `states_as_of: "inspection"`, and `truth_evaluated: false`. Each item includes its
 original entry, current review/state/warnings, direct references, and the Source
 of referenced Evidence. Items follow the receipt's original ID order; inactive

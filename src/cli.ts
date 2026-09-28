@@ -16,7 +16,7 @@ const help = `yurai — a local ledger of claims and their grounds
   yurai search QUERY [--kind claim|source] [--include-inactive] [--expand evidence]
                  [--path-limit L] [--path-offset O] [--as-of REV]
   yurai show ID [--limit 20] [--offset 0] [--as-of REV]
-  yurai show --request-id ID [--limit 20] [--offset 0]
+  yurai show --request-id ID [--limit 20] [--offset 0] [--as-of REV]
   yurai verify EVIDENCE_ID --file PATH [--edition LABEL] [--method verbatim|normalized]
   yurai export                         # snapshot JSON to stdout
   yurai import --file snapshot.json    # empty initialized ledger only
