@@ -197,6 +197,76 @@ test('capture inspection works through the readonly path', t => {
   assert.deepEqual(other.items.map(e => e.entry.id), ['clm_ro_inspect']);
   assert.throws(() => ledger.inspectCapture('req_no_such_capture'), code('NOT_FOUND'));
 });
+test('readonly open racing a migration fails safe, then succeeds after commit', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'yurai-ro-'));
+  const path = join(dir, 'race.sqlite');
+  // Register cleanup first so an early assertion failure cannot leak the
+  // temporary directory. Close both handles before removing the directory
+  // (Windows refuses to remove open database files).
+  const handles = {};
+  t.after(() => { handles.store?.close(); handles.writable?.close(); rmSync(dir, { recursive: true, force: true }); });
+  const v1 = new DatabaseSync(path);
+  v1.exec(readFileSync(new URL('./fixtures/v1-schema.sql', import.meta.url), 'utf8'));
+  v1.exec(`INSERT INTO records(id,type,body,actor,created_at) VALUES(` +
+    `'clm_race_seed','claim','{"text":"RACETERM synthetic","kind":"assertion","attributed_to":"t"}',` +
+    `'{"kind":"agent","id":"test-agent"}','2026-09-27T00:00:00.000Z')`);
+  v1.close();
+  const before = readFileSync(path);
+  // Deterministic race: hold an uncommitted migration-shaped transaction open
+  // on a separate connection across the readonly open. BEGIN IMMEDIATE plus
+  // the v1->v2 rebuild and version bump mirrors migrateV1toV2 and the
+  // registry version update in src/storage/sqlite.ts; no threads or sleeps.
+  const writer = new DatabaseSync(path);
+  writer.exec('PRAGMA busy_timeout=5000; PRAGMA foreign_keys=OFF;');
+  writer.exec('BEGIN IMMEDIATE');
+  writer.exec(`CREATE TABLE records_new (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE,
+  type TEXT NOT NULL CHECK(type IN ('source','claim','evidence','assessment','relation','review','verification')),
+  body TEXT NOT NULL CHECK(json_valid(body)), actor TEXT NOT NULL CHECK(json_valid(actor)), created_at TEXT NOT NULL
+) STRICT;
+INSERT INTO records_new(seq,id,type,body,actor,created_at) SELECT seq,id,type,body,actor,created_at FROM records;
+DROP TABLE records;
+ALTER TABLE records_new RENAME TO records;
+CREATE INDEX review_target ON records(json_extract(body, '$.target_id'), seq) WHERE type='review';
+CREATE TRIGGER records_update BEFORE UPDATE ON records BEGIN SELECT RAISE(ABORT, 'immutable ledger'); END;
+CREATE TRIGGER records_delete BEFORE DELETE ON records BEGIN SELECT RAISE(ABORT, 'immutable ledger'); END;
+PRAGMA user_version = 2;`);
+  try {
+    // The racing open must fail with the actionable writable-reopen error:
+    // never migrate, never retry writable, never see a half-migrated schema.
+    assert.throws(() => new SqliteStore(path, false, { readonly: true }), e =>
+      e instanceof LedgerError && e.code === 'SCHEMA' &&
+      /needs migration/.test(e.message) && /reopen without --readonly/.test(e.message));
+    // Concurrent readers still see the pre-commit snapshot: v1 with no
+    // half-migrated remainder.
+    const probe = new DatabaseSync(path, { readOnly: true });
+    try {
+      assert.equal(probe.prepare('PRAGMA user_version').get()?.user_version, 1);
+      const names = probe.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+        .all().map(r => r.name);
+      assert.ok(names.includes('records') && !names.includes('records_new'));
+    } finally {
+      probe.close();
+    }
+  } finally {
+    writer.exec('ROLLBACK');
+    writer.close();
+  }
+  // The failed race migrated nothing and retried nothing writable.
+  assert.deepEqual(readFileSync(path), before);
+  assert.throws(() => new SqliteStore(path, false, { readonly: true }), e =>
+    e instanceof LedgerError && e.code === 'SCHEMA' && /needs migration/.test(e.message));
+  // Post-migration the same readonly path succeeds on the migrated schema.
+  const writable = handles.writable = new SqliteStore(path);
+  assert.equal(writable.schemaVersion(), 2);
+  assert.ok(writable.entries().some(e => e.id === 'clm_race_seed'));
+  new Ledger(writable).capture(bundle2('req_race_post', 'clm_race_post'));
+  const store = handles.store = new SqliteStore(path, false, { readonly: true });
+  assert.equal(store.schemaVersion(), 2);
+  const ledger = new Ledger(store);
+  assert.ok(ledger.search('WALTERM').items.some(i => i.entry.id === 'clm_race_post'));
+  assert.ok(store.entries().some(e => e.id === 'clm_race_seed'));
+});
 function bundle2(request_id, id) {
   return { version: 1, request_id, actor, entries: [
     { id, type: 'claim', data: { text: 'WALTERM synthetic', kind: 'assertion', attributed_to: 't' } },
