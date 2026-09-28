@@ -1,3 +1,4 @@
+import { performance } from 'node:perf_hooks';
 import type { Entry, Receipt } from './model.js';
 import type { Store } from './ports.js';
 
@@ -42,29 +43,70 @@ function emptyStats(): StoreCallStats {
 
 /** Assess-only Store decorator: delegates every call verbatim and counts
  * Store-method calls plus rows returned and rows written (never SQL
- * statements or SQLite rows examined). Production paths (CLI, MCP) never
- * wrap the store; only the measurement harness opts in, so normal operation
+ * statements or SQLite rows examined). It also records each
+ * `transaction()` hold as a RESERVED-hold proxy (BEGIN IMMEDIATE to
+ * COMMIT/ROLLBACK in writable mode): honest about what it captures — wall
+ * time from callback entry (i.e. after BEGIN succeeded) to
+ * COMMIT/ROLLBACK return, including SQLite CPU and commit fsync, not
+ * kernel lock tracing or WAL-lock introspection. BEGIN-acquisition waits
+ * (busy-handler retries) are excluded by construction: the hold clock
+ * starts inside the wrapped callback, which the inner store invokes only
+ * after BEGIN succeeds, so a call whose BEGIN fails records a zero hold,
+ * distinctly from any real hold. Production paths (CLI, MCP) never wrap
+ * the store; only the measurement harness opts in, so normal operation
  * keeps one predictable branch per observer report site and no decorator
  * cost. */
 export class CountingStore implements Store {
   private readonly stats = emptyStats();
+  private txnDurations: number[] = [];
   constructor(private readonly inner: Store) {}
-  /** Snapshot the accumulated counts without resetting. */
+  /** Snapshot the accumulated counts without resetting. Timings are separate
+   * via txnTimings() so the count shape stays stable. */
   snapshot(): StoreCallStats {
     const out = emptyStats();
     for (const [k, v] of Object.entries(this.stats) as [StoreMethod, MethodStats][])
       out[k] = { ...v };
     return out;
   }
+  /** Snapshot accumulated transaction holds in milliseconds, one entry per
+   * transaction() call in order, including rolled-back attempts. Each
+   * entry approximates how long that call held the SQLite RESERVED lock
+   * (writable BEGIN IMMEDIATE): measured from callback entry to
+   * COMMIT/ROLLBACK return, so it excludes pre-txn validation, post-txn
+   * serialization, and BEGIN-acquisition waits. A call whose BEGIN fails
+   * records exactly 0 (the callback never ran, so no hold occurred). All
+   * nonzero entries are wall-clock and environment-dependent. */
+  txnTimings(): number[] {
+    return [...this.txnDurations];
+  }
   reset(): void {
     for (const v of Object.values(this.stats)) { v.calls = 0; v.rowsReturned = 0; v.rowsWritten = 0; }
+    this.txnDurations = [];
   }
   private hit(method: StoreMethod, rowsReturned: number, rowsWritten = 0): void {
     this.stats[method].calls++;
     this.stats[method].rowsReturned += rowsReturned;
     this.stats[method].rowsWritten += rowsWritten;
   }
-  transaction<T>(fn: () => T): T { this.hit('transaction', 0); return this.inner.transaction(fn); }
+  transaction<T>(fn: () => T): T {
+    this.hit('transaction', 0);
+    // The hold clock starts inside the wrapped callback, which the inner
+    // store invokes only after BEGIN succeeds (see SqliteStore.transaction).
+    // BEGIN-acquisition waits therefore never enter the sample, and a call
+    // whose BEGIN fails records exactly 0 instead of the seconds spent
+    // waiting. The wrapper still calls fn exactly once, so delegation stays
+    // verbatim and assess-only.
+    let holdStart: number | null = null;
+    const wrapped = (): T => { holdStart ??= performance.now(); return fn(); };
+    try {
+      const result = this.inner.transaction(wrapped);
+      this.txnDurations.push(holdStart === null ? 0 : performance.now() - holdStart);
+      return result;
+    } catch (error) {
+      this.txnDurations.push(holdStart === null ? 0 : performance.now() - holdStart);
+      throw error;
+    }
+  }
   get(id: string): Entry | undefined { const r = this.inner.get(id); this.hit('get', r ? 1 : 0); return r; }
   insert(entry: Entry): void { this.inner.insert(entry); this.hit('insert', 0, 1); }
   latestReview(id: string): Entry | undefined {
