@@ -1,20 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
-import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
-const cli = new URL('../dist/cli.js', import.meta.url);
-function setup(t) {
-  const dir = mkdtempSync(join(tmpdir(), 'yurai-cli-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const db = join(dir, 'ledger.sqlite');
-  const run = (args, input) => spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning', fileURLToPath(cli), '--db', db, ...args], { encoding: 'utf8', input });
-  return { dir, db, run };
-}
+import { cliSetup } from './helpers/cli.mjs';
 test('CLI init -> capture -> search -> show -> review -> export -> restore -> doctor', t => {
-  const { dir, run } = setup(t);
+  const { dir, run } = cliSetup(t);
   assert.equal(run(['init']).status, 0);
   const captured = run(['capture','--file','examples/capture.json']); assert.equal(captured.status, 0, captured.stderr);
   assert.equal(JSON.parse(run(['search','架空']).stdout).items.length, 2);
@@ -30,7 +21,7 @@ test('CLI init -> capture -> search -> show -> review -> export -> restore -> do
   assert.deepEqual(JSON.parse(run(['export','--db',dest]).stdout), JSON.parse(snapshot));
 });
 test('missing DB, malformed input, misuse and unknown fields are explicit failures', t => {
-  const { db, run } = setup(t);
+  const { db, run } = cliSetup(t);
   assert.equal(run(['search','AI']).status, 3); assert.equal(existsSync(db), false);
   assert.equal(run(['schema']).status, 0); assert.equal(existsSync(db), false);
   assert.equal(run(['init']).status, 0);
@@ -42,7 +33,7 @@ test('missing DB, malformed input, misuse and unknown fields are explicit failur
   assert.equal(run(['capture','--file','-'], 'x'.repeat(1024*1024+1)).status, 2);
 });
 test('CLI consumes stdin and schema is machine readable without a DB', t => {
-  const { db, run } = setup(t);
+  const { db, run } = cliSetup(t);
   const shapes = JSON.parse(run(['schema','record']).stdout).oneOf;
   assert.equal(shapes.length, 7);
   assert.equal(shapes.find(s => s.properties.type.const === 'verification').properties.data.properties.outcome.enum.length, 4);
@@ -55,7 +46,7 @@ test('CLI consumes stdin and schema is machine readable without a DB', t => {
 });
 
 test('CLI inspects a capture by request ID, with bounded pages and no mutation', t => {
-  const { run } = setup(t);
+  const { run } = cliSetup(t);
   run(['init']);
   run(['capture','--file','examples/dogfood/01-capture.json']);
   run(['capture','--file','examples/dogfood/02-correct.json']);
@@ -71,7 +62,7 @@ test('CLI inspects a capture by request ID, with bounded pages and no mutation',
   assert.equal(JSON.parse(run(['doctor']).stdout).ok, true);
 });
 test('CLI rejects ambiguous capture selectors before opening a DB', t => {
-  const { db, run } = setup(t);
+  const { db, run } = cliSetup(t);
   for (const args of [ ['show'], ['show','clm_demo','--request-id','req_x'],
     ['show','--request-id','req_x','--state','accepted'], ['show','--request-id','req_x','--dry-run'] ]) {
     assert.equal(run(args).status, 2);
@@ -85,7 +76,7 @@ test('CLI rejects ambiguous capture selectors before opening a DB', t => {
   assert.equal(run(['show','--request-id','req_missing','--limit','101']).status, 2);
 });
 test('CLI expands Evidence-only terms to Claims end to end', t => {
-  const { run } = setup(t);
+  const { run } = cliSetup(t);
   run(['init']);
   run(['capture','--file','examples/dogfood/01-capture.json']);
   run(['capture','--file','examples/dogfood/02-correct.json']);
@@ -98,14 +89,14 @@ test('CLI expands Evidence-only terms to Claims end to end', t => {
   assert.equal(JSON.parse(run(['doctor']).stdout).ok, true);
 });
 test('CLI rejects bad expanded-search usage', t => {
-  const { run } = setup(t);
+  const { run } = cliSetup(t);
   assert.equal(run(['show','clm_demo','--expand','evidence']).status, 2);
   run(['init']);
   assert.equal(run(['search','ZKQ','--expand','bogus']).status, 2);
   assert.equal(run(['search','ZKQ','--kind','source','--expand','evidence']).status, 2);
 });
 function seedVerify(t) {
-  const { dir, run } = setup(t);
+  const { dir, run } = cliSetup(t);
   run(['init']);
   const bundle = { version: 1, request_id: 'req_cli_verify_seed', actor: { kind: 'human', id: 'cli' }, entries: [
     { id: 'src_cli', type: 'source', data: { title: 'local file', medium: 'note', uri: 'urn:yurai:synthetic:cli', version: 'v1' } },
@@ -159,7 +150,7 @@ test('CLI rejects bad verify usage and undecodable input', t => {
   assert.equal(run(['verify','evd_cli','--file',big]).status, 2);
 });
 test('CLI refuses to export snapshots over 16 MiB without partial output', t => {
-  const { dir, run } = setup(t);
+  const { dir, run } = cliSetup(t);
   run(['init']);
   const text = 'x'.repeat(8000);
   for (let b = 0; b < 23; b++) {
@@ -176,35 +167,38 @@ test('CLI refuses to export snapshots over 16 MiB without partial output', t => 
   assert.equal(out.stdout, '');
   assert.match(out.stderr, /16 MiB/);
 });
-test('CLI refuses to import snapshots over 16 MiB and leaves the target empty', t => {
-  const { dir, run } = setup(t);
-  run(['init']);
-  const huge = join(dir, 'huge.json');
-  writeFileSync(huge, Buffer.alloc(16 * 1024 * 1024 + 1, 120));
-  const out = run(['import', '--file', huge]);
-  assert.equal(out.status, 2);
-  assert.equal(out.stdout, '');
-  assert.match(out.stderr, /exceeds/);
-  const snapshot = JSON.parse(run(['export']).stdout);
-  assert.deepEqual(snapshot.entries, []);
-  assert.deepEqual(snapshot.receipts, []);
-});
-test('CLI refuses oversized import before migrating an old target', t => {
-  const { dir, db, run } = setup(t);
-  const seed = new DatabaseSync(db);
-  seed.exec(readFileSync(new URL('./fixtures/v1-schema.sql', import.meta.url), 'utf8'));
-  seed.close();
-  const huge = join(dir, 'huge.json');
-  writeFileSync(huge, Buffer.alloc(16 * 1024 * 1024 + 1, 120));
-  const out = run(['import', '--file', huge]);
-  assert.equal(out.status, 2);
-  assert.equal(out.stdout, '');
-  const check = new DatabaseSync(db);
-  assert.equal(check.prepare('PRAGMA user_version').get().user_version, 1);
-  check.close();
+test('CLI refuses oversized import, leaving the target empty or unmigrated', t => {
+  const hugeFile = dir => {
+    const huge = join(dir, 'huge.json');
+    writeFileSync(huge, Buffer.alloc(16 * 1024 * 1024 + 1, 120));
+    return huge;
+  };
+  { // Empty target: refused with no partial restore.
+    const { dir, run } = cliSetup(t);
+    run(['init']);
+    const out = run(['import', '--file', hugeFile(dir)]);
+    assert.equal(out.status, 2);
+    assert.equal(out.stdout, '');
+    assert.match(out.stderr, /exceeds/);
+    const snapshot = JSON.parse(run(['export']).stdout);
+    assert.deepEqual(snapshot.entries, []);
+    assert.deepEqual(snapshot.receipts, []);
+  }
+  { // Old target: refused before any migration runs.
+    const { dir, db, run } = cliSetup(t);
+    const seed = new DatabaseSync(db);
+    seed.exec(readFileSync(new URL('./fixtures/v1-schema.sql', import.meta.url), 'utf8'));
+    seed.close();
+    const out = run(['import', '--file', hugeFile(dir)]);
+    assert.equal(out.status, 2);
+    assert.equal(out.stdout, '');
+    const check = new DatabaseSync(db);
+    assert.equal(check.prepare('PRAGMA user_version').get().user_version, 1);
+    check.close();
+  }
 });
 test('CLI --readonly serves reads and refuses writes without touching bytes', t => {
-  const { dir, db, run } = setup(t);
+  const { dir, db, run } = cliSetup(t);
   assert.equal(run(['init']).status, 0);
   assert.equal(run(['capture', '--file', 'examples/capture.json']).status, 0);
   const before = readFileSync(db);
@@ -224,7 +218,7 @@ test('CLI --readonly serves reads and refuses writes without touching bytes', t 
   assert.deepEqual(readFileSync(db), before);
 });
 test('CLI pages expanded match paths independently of the claim page', t => {
-  const { run } = setup(t);
+  const { run } = cliSetup(t);
   assert.equal(run(['init']).status, 0);
   assert.equal(run(['capture', '--file', 'examples/eval/ledger.json']).status, 0);
   assert.equal(run(['capture', '--file', 'examples/eval/ledger-wd-deps.json']).status, 0);
@@ -244,7 +238,7 @@ test('CLI pages expanded match paths independently of the claim page', t => {
   assert.match(bad.stderr, /path paging/);
 });
 test('CLI --as-of restarts paged reads after a write', t => {
-  const { dir, run } = setup(t);
+  const { dir, run } = cliSetup(t);
   assert.equal(run(['init']).status, 0);
   assert.equal(run(['capture', '--file', 'examples/capture.json']).status, 0);
   const first = JSON.parse(run(['search', '架空', '--limit', '1']).stdout);
@@ -262,13 +256,13 @@ test('CLI --as-of restarts paged reads after a write', t => {
   assert.equal(bad.status, 2);
 });
 test('CLI rejects init --readonly as contradictory', t => {
-  const { run } = setup(t);
+  const { run } = cliSetup(t);
   const out = run(['init', '--readonly']);
   assert.equal(out.status, 2);
   assert.match(out.stderr, /readonly/);
 });
 test('CLI carries the full Core expanded-search representation without loss', t => {
-  const { run } = setup(t);
+  const { run } = cliSetup(t);
   assert.equal(run(['init']).status, 0);
   assert.equal(run(['capture', '--file', 'examples/eval/ledger.json']).status, 0);
   assert.equal(run(['capture', '--file', 'examples/eval/ledger-wd-deps.json']).status, 0);

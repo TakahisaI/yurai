@@ -5,22 +5,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
-import { Ledger, LedgerError, SqliteStore } from '../dist/index.js';
+import { Ledger, SqliteStore } from '../dist/index.js';
+import { code } from './helpers/assert.mjs';
+import { memorySetup } from './helpers/memory.mjs';
 
 const example = JSON.parse(readFileSync(new URL('../examples/capture.json', import.meta.url), 'utf8'));
 const actor = { kind: 'agent', id: 'test-agent', model: 'synthetic' };
 const claim = (id, text = '出生率 AI evidence 100% a_b "quote" ＡＢＣ') => ({ id, type: 'claim',
   data: { text, kind: 'hypothesis', attributed_to: 'test', scope: 'not a real research finding' } });
 const bundle = (entries, request_id = 'req_test') => ({ version: 1, request_id, actor, entries });
-function setup(t) {
-  const store = new SqliteStore(':memory:', true);
-  t.after(() => store.close());
-  return { store, ledger: new Ledger(store, () => '2026-09-27T00:00:00.000Z') };
-}
-function code(expected) { return e => e instanceof LedgerError && e.code === expected; }
-
 test('complete capture retrieves claim, attribution, evidence, source and qualification', t => {
-  const { store, ledger } = setup(t);
+  const { store, ledger } = memorySetup(t);
   ledger.capture(example);
   const view = ledger.show('clm_demo');
   assert.equal(view.entry.data.attributed_to, '架空の実験者');
@@ -32,14 +27,14 @@ test('complete capture retrieves claim, attribution, evidence, source and qualif
   assert.equal(store.doctor().ok, true);
 });
 test('supports, challenges and source reports are preserved separately for one span', t => {
-  const { ledger } = setup(t); ledger.capture(example);
+  const { ledger } = memorySetup(t); ledger.capture(example);
   ledger.capture(bundle(['supports', 'challenges'].map(stance => ({ id: `asm_${stance}`, type: 'assessment',
     data: { claim_id: 'clm_demo', evidence_id: 'evd_demo', stance, rationale: `test ${stance}` } }))));
   assert.deepEqual(new Set(ledger.show('clm_demo').connections.filter(c => c.entry.type === 'assessment').map(c => c.entry.data.stance)),
     new Set(['reports','supports','challenges']));
 });
 test('idempotent retry is canonical for object key order, not altered payloads', t => {
-  const { store, ledger } = setup(t); const original = bundle([claim('clm_one')]);
+  const { store, ledger } = memorySetup(t); const original = bundle([claim('clm_one')]);
   const saved = ledger.capture(original);
   assert.equal(ledger.capture({ entries: original.entries, actor, request_id: 'req_test', version: 1 }).replayed, true);
   assert.equal(store.count(), 1);
@@ -47,24 +42,24 @@ test('idempotent retry is canonical for object key order, not altered payloads',
   assert.equal(saved.ids[0], 'clm_one');
 });
 test('dry run writes neither records nor receipts', t => {
-  const { store, ledger } = setup(t); ledger.capture(example, true);
+  const { store, ledger } = memorySetup(t); ledger.capture(example, true);
   assert.equal(store.count(), 0); assert.equal(store.receipts().length, 0);
   assert.equal(ledger.capture(example).replayed, false);
 });
 test('dangling and wrong-typed references reject the whole bundle', t => {
-  const { store, ledger } = setup(t);
+  const { store, ledger } = memorySetup(t);
   assert.throws(() => ledger.capture(bundle([claim('clm_one'), { id: 'evd_bad', type: 'evidence', data: { source_id: 'src_missing', quote: 'x' } }])), code('NOT_FOUND'));
   assert.equal(store.count(), 0);
   assert.throws(() => ledger.capture(bundle([claim('clm_one'), { id: 'evd_bad', type: 'evidence', data: { source_id: 'clm_one', quote: 'x' } }])), code('VALIDATION'));
   assert.equal(store.count(), 0); assert.equal(store.receipts().length, 0);
 });
 test('forward references are allowed within an atomic capture', t => {
-  const { store, ledger } = setup(t);
+  const { store, ledger } = memorySetup(t);
   ledger.capture({ ...example, entries: [...example.entries].reverse() });
   assert.equal(store.count(), 6); assert.equal(store.doctor().ok, true);
 });
 test('an injected storage failure rolls back content, index and receipt', t => {
-  const { store, ledger } = setup(t);
+  const { store, ledger } = memorySetup(t);
   const insert = store.insert.bind(store); let n = 0;
   store.insert = e => { insert(e); if (++n === 2) throw new Error('injected failure'); };
   assert.throws(() => ledger.capture(bundle([claim('clm_one'), claim('clm_two')])));
@@ -72,7 +67,7 @@ test('an injected storage failure rolls back content, index and receipt', t => {
   assert.equal(ledger.search('AI').items.length, 0); assert.equal(store.doctor().ok, true);
 });
 test('blank, unknown, malformed, and oversized data are rejected', t => {
-  const { ledger } = setup(t);
+  const { ledger } = memorySetup(t);
   for (const input of [claim('clm_one', ''), claim('clm_one', ' '.repeat(10)), claim('clm_one', 'x'.repeat(8001)),
     { ...claim('clm_one'), invented: true }, { ...claim('clm_one'), data: { ...claim('x').data, confidence: 0.9 } },
     { id: 'evd_one', type: 'evidence', data: { source_id: 'src_one', paraphrase: 'unanchored summary' } },
@@ -83,13 +78,13 @@ test('blank, unknown, malformed, and oversized data are rejected', t => {
   assert.throws(() => ledger.capture(bundle(Array.from({ length: 201 }, (_, i) => claim(`clm_${i}`)))), code('VALIDATION'));
 });
 test('duplicate immutable IDs are never silently overwritten or merged', t => {
-  const { ledger } = setup(t);
+  const { ledger } = memorySetup(t);
   assert.throws(() => ledger.capture(bundle([claim('clm_one'), claim('clm_one')])), code('CONFLICT'));
   ledger.capture(bundle([claim('clm_one')]));
   assert.throws(() => ledger.capture(bundle([claim('clm_one')], 'req_other')), code('CONFLICT'));
 });
 test('Japanese, short terms, mixed tokens, punctuation and NFKC are literal', t => {
-  const { ledger } = setup(t); ledger.capture(bundle([claim('clm_one')]));
+  const { ledger } = memorySetup(t); ledger.capture(bundle([claim('clm_one')]));
   for (const q of ['出生率', '出生', '率', 'AI', '出生 AI', '100%', 'a_b', '"quote"', 'ABC'])
     assert.equal(ledger.search(q).items.length, 1, q);
   for (const q of ['100_', 'a%b', 'unknown', 'AI OR missing']) assert.equal(ledger.search(q).items.length, 0, q);
@@ -98,7 +93,7 @@ test('Japanese, short terms, mixed tokens, punctuation and NFKC are literal', t 
   assert.throws(() => ledger.search('AI', { offset: -1 }), code('VALIDATION'));
 });
 test('search is paginated, source search is explicit', t => {
-  const { ledger } = setup(t); ledger.capture(bundle([claim('clm_one'), claim('clm_two'), claim('clm_three')]));
+  const { ledger } = memorySetup(t); ledger.capture(bundle([claim('clm_one'), claim('clm_two'), claim('clm_three')]));
   const first = ledger.search('AI', { limit: 2 });
   assert.equal(first.next_offset, 2);
   assert.equal(ledger.search('AI', { limit: 2, offset: 2 }).next_offset, null);
@@ -106,7 +101,7 @@ test('search is paginated, source search is explicit', t => {
   assert.equal(ledger.search('架空', { kind: 'source' }).items[0].entry.id, 'src_demo');
 });
 test('review changes workflow status, not truth or quote verification', t => {
-  const { ledger } = setup(t); ledger.capture(example);
+  const { ledger } = memorySetup(t); ledger.capture(example);
   ledger.capture(bundle([{ id: 'rev_one', type: 'review', data: { target_id: 'evd_demo', state: 'accepted', rationale: 'retained, not checked' } }]));
   const evidence = ledger.show('evd_demo');
   assert.equal(evidence.state, 'accepted');
@@ -114,7 +109,7 @@ test('review changes workflow status, not truth or quote verification', t => {
   assert.equal(evidence.truth_evaluated, false);
 });
 test('review ordering uses insertion sequence and withdrawn records remain auditable', t => {
-  const { ledger } = setup(t); ledger.capture(bundle([claim('clm_one')]));
+  const { ledger } = memorySetup(t); ledger.capture(bundle([claim('clm_one')]));
   ledger.capture(bundle([{ id: 'rev_one', type: 'review', data: { target_id: 'clm_one', state: 'accepted', rationale: 'retain' } }], 'req_review1'));
   ledger.capture(bundle([{ id: 'rev_two', type: 'review', data: { target_id: 'clm_one', state: 'withdrawn', rationale: 'mistake' } }], 'req_review2'));
   assert.equal(ledger.search('AI').items.length, 0);
@@ -123,20 +118,20 @@ test('review ordering uses insertion sequence and withdrawn records remain audit
   assert.equal(ledger.show('clm_one', 1).next_offset, 1);
 });
 test('inactive evidence is visible as inactive when inspecting a supported claim', t => {
-  const { ledger } = setup(t); ledger.capture(example);
+  const { ledger } = memorySetup(t); ledger.capture(example);
   ledger.capture(bundle([{ id: 'rev_one', type: 'review', data: { target_id: 'evd_demo', state: 'withdrawn', rationale: 'bad quote' } }]));
   const evidence = ledger.show('clm_demo').connections.find(c => c.entry.type === 'assessment').references.find(r => r.entry.type === 'evidence');
   assert.equal(evidence.state, 'withdrawn'); assert.ok(evidence.warnings.includes('inactive_record'));
 });
 test('supersedes direction is new to old and cycles are forbidden', t => {
-  const { ledger } = setup(t);
+  const { ledger } = memorySetup(t);
   const relation = (id, from, to) => ({ id, type: 'relation', data: { from_claim_id: from, to_claim_id: to, relation: 'supersedes', rationale: 'correction' } });
   ledger.capture(bundle([claim('clm_old'), claim('clm_new'), relation('rel_new', 'clm_new', 'clm_old')]));
   assert.throws(() => ledger.capture(bundle([relation('rel_loop', 'clm_old', 'clm_new')], 'req_loop')), code('VALIDATION'));
   assert.throws(() => ledger.capture(bundle([relation('rel_self', 'clm_old', 'clm_old')], 'req_self')), code('VALIDATION'));
 });
 test('snapshot round trip preserves IDs, actors, receipts, order and retrieval', t => {
-  const { ledger } = setup(t); const second = setup(t);
+  const { ledger } = memorySetup(t); const second = memorySetup(t);
   ledger.capture(example);
   ledger.capture(bundle([{ id: 'rev_one', type: 'review', data: { target_id: 'clm_demo', state: 'accepted', rationale: 'retain' } }]));
   const snapshot = ledger.exportSnapshot();
@@ -147,7 +142,7 @@ test('snapshot round trip preserves IDs, actors, receipts, order and retrieval',
   assert.throws(() => second.ledger.importSnapshot(snapshot), code('CONFLICT'));
 });
 test('invalid snapshots roll back and cannot install dangling receipts', t => {
-  const { store, ledger } = setup(t);
+  const { store, ledger } = memorySetup(t);
   const snapshot = { format: 'yurai.snapshot', version: 1, entries: [], receipts: [{ request_id: 'req_bad', digest: 'a'.repeat(64), ids: ['clm_missing'] }] };
   assert.throws(() => ledger.importSnapshot(snapshot), code('VALIDATION'));
   assert.equal(store.count(), 0); assert.equal(store.receipts().length, 0);
@@ -169,7 +164,7 @@ test('reopen, application identity, future schema refusal and immutable storage'
 
 const dogfood = name => JSON.parse(readFileSync(new URL(`../examples/dogfood/${name}`, import.meta.url), 'utf8'));
 test('inspectCapture pages original membership, expands grounds, and never mutates records', t => {
-  const { ledger, store } = setup(t);
+  const { ledger, store } = memorySetup(t);
   ledger.capture(example);
   const before = ledger.exportSnapshot();
   // Inspect a known receipt without scanning/exporting the whole ledger.
@@ -192,7 +187,7 @@ test('inspectCapture pages original membership, expands grounds, and never mutat
   assert.deepEqual(ledger.exportSnapshot(), before);
 });
 test('capture inspection survives restore and presents current reviews without rewriting events', t => {
-  const { ledger } = setup(t), other = setup(t);
+  const { ledger } = memorySetup(t), other = memorySetup(t);
   const first = dogfood('01-capture.json'), correction = dogfood('02-correct.json');
   ledger.capture(first); ledger.capture(correction);
   const old = ledger.inspectCapture(first.request_id).items.find(v => v.entry.id === 'clm_fixture_old');
@@ -212,7 +207,7 @@ test('capture inspection survives restore and presents current reviews without r
   assert.equal(other.ledger.capture(correction).replayed, true);
 });
 test('capture inspection validates selection and never exposes a dry-run as saved', t => {
-  const { ledger } = setup(t); ledger.capture(example, true);
+  const { ledger } = memorySetup(t); ledger.capture(example, true);
   assert.throws(() => ledger.inspectCapture(example.request_id), code('NOT_FOUND'));
   for (const id of ['', 'x', 'bad id', 'a'.repeat(129), 42])
     assert.throws(() => ledger.inspectCapture(id), code('VALIDATION'));
@@ -221,7 +216,7 @@ test('capture inspection validates selection and never exposes a dry-run as save
   assert.throws(() => ledger.inspectCapture('req_missing', 20, -1), code('VALIDATION'));
 });
 test('synthetic dogfood preserves attribution, disagreement, correction and current literal-search limit', t => {
-  const { ledger } = setup(t);
+  const { ledger } = memorySetup(t);
   ledger.capture(dogfood('01-capture.json')); ledger.capture(dogfood('02-correct.json'));
   const user = ledger.show('clm_fixture_user');
   assert.equal(user.entry.actor.id, 'fixture-agent');
@@ -245,7 +240,7 @@ test('synthetic dogfood preserves attribution, disagreement, correction and curr
   assert.equal(anchor.state, 'proposed'); assert.ok(anchor.warnings.includes('anchor_not_verified'));
 });
 test('expanded discovery routes Evidence-only terms to Claims with match provenance', t => {
-  const { ledger } = setup(t); ledger.capture(dogfood('01-capture.json'));
+  const { ledger } = memorySetup(t); ledger.capture(dogfood('01-capture.json'));
   const found = ledger.search('ZKQ', { expand: 'evidence' });
   assert.equal(found.match, 'expanded_evidence_routed'); assert.equal(found.truth_evaluated, false);
   assert.deepEqual(found.items.map(v => v.entry.id), ['clm_fixture_old', 'clm_fixture_user']);
@@ -261,7 +256,7 @@ test('expanded discovery routes Evidence-only terms to Claims with match provena
   assert.ok(found.items[1].via[0].assessment.entry.data.rationale);
 });
 test('expanded discovery unions direct and routed matches without source fanout', t => {
-  const { ledger } = setup(t); ledger.capture(dogfood('01-capture.json'));
+  const { ledger } = memorySetup(t); ledger.capture(dogfood('01-capture.json'));
   const found = ledger.search('架空', { expand: 'evidence' });
   assert.deepEqual(found.items.map(v => v.entry.id), ['clm_fixture_agent', 'clm_fixture_old', 'clm_fixture_user']);
   assert.ok(found.items.every(v => v.direct_match));
@@ -273,7 +268,7 @@ test('expanded discovery unions direct and routed matches without source fanout'
   assert.equal(ledger.search('ZKQ', { expand: 'evidence' }).items.some(v => v.entry.id === 'clm_fixture_agent'), false);
 });
 test('expanded discovery respects withdrawal without resurrecting it', t => {
-  const { ledger } = setup(t);
+  const { ledger } = memorySetup(t);
   ledger.capture(dogfood('01-capture.json')); ledger.capture(dogfood('02-correct.json'));
   const found = ledger.search('ZKQ', { expand: 'evidence' });
   assert.deepEqual(found.items.map(v => v.entry.id), ['clm_fixture_corrected', 'clm_fixture_user']);
@@ -285,7 +280,7 @@ test('expanded discovery respects withdrawal without resurrecting it', t => {
 });
 test('expanded discovery drops inactive path members by default, keeps them for audit', t => {
   for (const [target, remaining] of [['asm_fixture_support', ['clm_fixture_user']], ['evd_fixture_x', []], ['src_fixture', []]]) {
-    const { ledger } = setup(t); ledger.capture(dogfood('01-capture.json'));
+    const { ledger } = memorySetup(t); ledger.capture(dogfood('01-capture.json'));
     ledger.capture(bundle([{ id: `rev_drop_${target}`, type: 'review',
       data: { target_id: target, state: 'withdrawn', rationale: 'drop this path' } }], `req_drop_${target}`));
     const found = ledger.search('ZKQ', { expand: 'evidence' });
@@ -298,7 +293,7 @@ test('expanded discovery drops inactive path members by default, keeps them for 
   }
 });
 test('expanded discovery keeps opposing stances, pages paths and claims, and survives restore', t => {
-  const { ledger } = setup(t);
+  const { ledger } = memorySetup(t);
   const entries = [
     { id: 'src_r', type: 'source', data: { title: 'synthetic retrieval', medium: 'note', uri: 'urn:yurai:synthetic:r' } },
     { id: 'clm_r', type: 'claim', data: { text: 'routed only', kind: 'assertion', attributed_to: 'test' } },
@@ -317,12 +312,12 @@ test('expanded discovery keeps opposing stances, pages paths and claims, and sur
   assert.equal(one.items.length, 1); assert.equal(one.next_offset, 1);
   assert.equal(one.items[0].total_paths, 2); assert.equal(one.items[0].paths_truncated, true);
   assert.equal(ledger.search('QWQ', { expand: 'evidence', limit: 1, offset: 1 }).items[0].entry.id, 'clm_r2');
-  const other = setup(t);
+  const other = memorySetup(t);
   other.ledger.importSnapshot(ledger.exportSnapshot());
   assert.deepEqual(other.ledger.search('QWQ', { expand: 'evidence' }).items.map(v => v.entry.id), ['clm_r', 'clm_r2']);
 });
 test('expanded discovery matches short terms, NFKC, and punctuation; locators stay out', t => {
-  const { ledger } = setup(t); ledger.capture(dogfood('01-capture.json'));
+  const { ledger } = memorySetup(t); ledger.capture(dogfood('01-capture.json'));
   assert.ok(ledger.search('ＺＫＱ', { expand: 'evidence' }).items.length > 0);
   assert.ok(ledger.search('Xで', { expand: 'evidence' }).items.some(v => v.entry.id === 'clm_fixture_user'));
   assert.ok(ledger.search('A=80', { expand: 'evidence' }).items.some(v => v.entry.id === 'clm_fixture_old'));
@@ -335,7 +330,7 @@ test('expanded discovery matches short terms, NFKC, and punctuation; locators st
   assert.throws(() => ledger.search('ZKQ', { kind: 'source', expand: 'evidence' }), code('VALIDATION'));
 });
 test('expanded discovery covers rejected states, tiny terms, AND, and edge pagination', t => {
-  const { ledger } = setup(t);
+  const { ledger } = memorySetup(t);
   ledger.capture(bundle([
     { id: 'src_e', type: 'source', data: { title: 'edge', medium: 'note', uri: 'urn:yurai:synthetic:edge' } },
     { id: 'clm_e', type: 'claim', data: { text: 'edge host', kind: 'assertion', attributed_to: 'test' } },
@@ -363,24 +358,45 @@ test('expanded discovery covers rejected states, tiny terms, AND, and edge pagin
   assert.equal(audit.items[0].via.find(p => p.assessment.entry.id === 'asm_e2').assessment.state, 'rejected');
 });
 test('expanded discovery orders mixed-precision timestamps by instant, not string', t => {
-  const { ledger } = setup(t);
-  const actor = { kind: 'agent', id: 'test-agent' };
-  const entry = (id, type, data, created_at) => ({ id, type, data, actor, created_at });
-  ledger.importSnapshot({ format: 'yurai.snapshot', version: 1, receipts: [], entries: [
-    entry('src_m', 'source', { title: 'mixed', medium: 'note', uri: 'urn:yurai:synthetic:mixed' }, '2026-09-27T00:00:00Z'),
-    entry('clm_m_old', 'claim', { text: 'older', kind: 'assertion', attributed_to: 'test' }, '2026-09-27T00:00:00Z'),
-    entry('clm_m_new', 'claim', { text: 'newer', kind: 'assertion', attributed_to: 'test' }, '2026-09-27T00:00:00.500Z'),
-    entry('evd_m_old', 'evidence', { source_id: 'src_m', quote: 'MPX older' }, '2026-09-27T00:00:00Z'),
-    entry('evd_m_new', 'evidence', { source_id: 'src_m', quote: 'MPX newer' }, '2026-09-27T00:00:00.500Z'),
-    entry('asm_m_old', 'assessment', { claim_id: 'clm_m_old', evidence_id: 'evd_m_old', stance: 'supports', rationale: 'o' }, '2026-09-27T00:00:00Z'),
-    entry('asm_m_new', 'assessment', { claim_id: 'clm_m_new', evidence_id: 'evd_m_new', stance: 'supports', rationale: 'n' }, '2026-09-27T00:00:00.500Z'),
-    entry('asm_m_new2', 'assessment', { claim_id: 'clm_m_new', evidence_id: 'evd_m_new', stance: 'challenges', rationale: 'c' }, '2026-09-27T00:00:00Z') ] });
-  const found = ledger.search('MPX', { expand: 'evidence' });
-  assert.deepEqual(found.items.map(v => v.entry.id), ['clm_m_new', 'clm_m_old']);
-  assert.deepEqual(found.items[0].via.map(p => p.assessment.entry.id), ['asm_m_new', 'asm_m_new2']);
+  { // Import path: mixed precisions arrive via importSnapshot.
+    const { ledger } = memorySetup(t);
+    const actor = { kind: 'agent', id: 'test-agent' };
+    const entry = (id, type, data, created_at) => ({ id, type, data, actor, created_at });
+    ledger.importSnapshot({ format: 'yurai.snapshot', version: 1, receipts: [], entries: [
+      entry('src_m', 'source', { title: 'mixed', medium: 'note', uri: 'urn:yurai:synthetic:mixed' }, '2026-09-27T00:00:00Z'),
+      entry('clm_m_old', 'claim', { text: 'older', kind: 'assertion', attributed_to: 'test' }, '2026-09-27T00:00:00Z'),
+      entry('clm_m_new', 'claim', { text: 'newer', kind: 'assertion', attributed_to: 'test' }, '2026-09-27T00:00:00.500Z'),
+      entry('evd_m_old', 'evidence', { source_id: 'src_m', quote: 'MPX older' }, '2026-09-27T00:00:00Z'),
+      entry('evd_m_new', 'evidence', { source_id: 'src_m', quote: 'MPX newer' }, '2026-09-27T00:00:00.500Z'),
+      entry('asm_m_old', 'assessment', { claim_id: 'clm_m_old', evidence_id: 'evd_m_old', stance: 'supports', rationale: 'o' }, '2026-09-27T00:00:00Z'),
+      entry('asm_m_new', 'assessment', { claim_id: 'clm_m_new', evidence_id: 'evd_m_new', stance: 'supports', rationale: 'n' }, '2026-09-27T00:00:00.500Z'),
+      entry('asm_m_new2', 'assessment', { claim_id: 'clm_m_new', evidence_id: 'evd_m_new', stance: 'challenges', rationale: 'c' }, '2026-09-27T00:00:00Z') ] });
+    const found = ledger.search('MPX', { expand: 'evidence' });
+    assert.deepEqual(found.items.map(v => v.entry.id), ['clm_m_new', 'clm_m_old']);
+    assert.deepEqual(found.items[0].via.map(p => p.assessment.entry.id), ['asm_m_new', 'asm_m_new2']);
+  }
+  { // Capture path: mixed precisions arrive via two-clock capture.
+    const store = new SqliteStore(':memory:', true);
+    t.after(() => store.close());
+    const early = new Ledger(store, () => '2026-01-01T00:00:00Z');
+    const late = new Ledger(store, () => '2026-01-01T00:00:00.500Z');
+    early.capture(bundle([
+      { id: 'src_mx', type: 'source', data: { title: 't', medium: 'note', uri: 'urn:yurai:synthetic:mx' } },
+      claim('clm_mx'),
+      { id: 'evd_mx1', type: 'evidence', data: { source_id: 'src_mx', quote: 'MIXTERM one' } },
+      { id: 'evd_mx2', type: 'evidence', data: { source_id: 'src_mx', quote: 'MIXTERM two' } },
+      { id: 'asm_mx1', type: 'assessment', data: { claim_id: 'clm_mx', evidence_id: 'evd_mx1', stance: 'supports', rationale: 'r' } },
+    ], 'req_mx_1'));
+    late.capture(bundle([
+      { id: 'asm_mx2', type: 'assessment', data: { claim_id: 'clm_mx', evidence_id: 'evd_mx2', stance: 'supports', rationale: 'r' } },
+    ], 'req_mx_2'));
+    const found = late.search('MIXTERM', { expand: 'evidence' });
+    const item = found.items.find(v => v.entry.id === 'clm_mx');
+    assert.deepEqual(item.via.map(p => p.assessment.entry.id), ['asm_mx2', 'asm_mx1']);
+  }
 });
 function verifySetup(t) {
-  const { ledger } = setup(t);
+  const { ledger } = memorySetup(t);
   const actor = { kind: 'agent', id: 'test-agent' };
   const entries = [
     { id: 'src_v', type: 'source', data: { title: 'checkable', medium: 'note', uri: 'urn:yurai:synthetic:check' } },
@@ -466,7 +482,7 @@ test('verification contract rejects bad shapes and wrong targets', t => {
   snap.entries.push({ id: 'bad_req_bad9', type: 'verification', data: { ...good, occurrences: 2 },
     created_at: good.verified_at, actor });
   snap.receipts.push({ request_id: 'req_bad9', digest: 'b'.repeat(64), ids: ['bad_req_bad9'] });
-  assert.throws(() => setup(t).ledger.importSnapshot(snap), code('VALIDATION'));
+  assert.throws(() => memorySetup(t).ledger.importSnapshot(snap), code('VALIDATION'));
   assert.throws(() => ledger.capture(bundle([{ id: 'rev_ver', type: 'review',
     data: { target_id: 'bad_req_good', state: 'accepted', rationale: 'nope' } }], 'req_rev_ver')), code('VALIDATION'));
   assert.throws(() => ledger.verifyEvidence({ evidence_id: 'missing', content: Buffer.from('x'), actor, request_id: 'req_nf' }), code('NOT_FOUND'));
@@ -516,7 +532,7 @@ test('verification survives export/restore and replays idempotently', t => {
     actor, request_id: 'req_dry_v', dryRun: true });
   assert.equal(dry.dry_run, true); assert.equal(dry.outcome, 'match');
   assert.equal(ledger.show('evd_x').verification, null);
-  const other = setup(t);
+  const other = memorySetup(t);
   other.ledger.importSnapshot(ledger.exportSnapshot());
   assert.equal(other.ledger.show('evd_m').verification.outcome, 'match');
   assert.equal(other.ledger.show('evd_m').verification.id, first.verification.entry.id);
@@ -706,7 +722,7 @@ test('migration failure rolls back and a repaired retry succeeds', t => {
   assert.deepEqual(store.entries().map(e => e.id), ['src_f', 'evd_f']);
 });
 test('expanded discovery pages match paths independently with deterministic continuation', t => {
-  const { ledger } = setup(t);
+  const { ledger } = memorySetup(t);
   const entries = [
     { id: 'src_p', type: 'source', data: { title: 'synthetic paging', medium: 'note', uri: 'urn:yurai:synthetic:p' } },
     { id: 'clm_p', type: 'claim', data: { text: 'paged routes', kind: 'assertion', attributed_to: 'test' } },
@@ -754,7 +770,7 @@ test('expanded discovery pages match paths independently with deterministic cont
   assert.throws(() => ledger.search('QPQ', { expand: 'evidence', pathOffset: null }), code('VALIDATION'));
 });
 test('paged search binds to a revision and restarts explicitly on change', t => {
-  const { ledger } = setup(t);
+  const { ledger } = memorySetup(t);
   ledger.capture(bundle([claim('clm_r1'), claim('clm_r2')], 'req_r_rev'));
   const first = ledger.search('出生率', { limit: 1 });
   assert.equal(typeof first.revision, 'number');
@@ -767,7 +783,7 @@ test('paged search binds to a revision and restarts explicitly on change', t => 
   assert.throws(() => ledger.search('出生率', { asOf: 1.5 }), code('VALIDATION'));
 });
 test('show and capture inspection bind pages to a revision', t => {
-  const { ledger } = setup(t);
+  const { ledger } = memorySetup(t);
   ledger.capture(bundle([
     { id: 'src_rv', type: 'source', data: { title: 't', medium: 'note', uri: 'urn:yurai:synthetic:rv' } },
     claim('clm_rv'),
@@ -786,27 +802,8 @@ test('show and capture inspection bind pages to a revision', t => {
   assert.throws(() => ledger.inspectCapture('req_r_show', 2, 2, page.revision), code('CONFLICT'));
   assert.throws(() => ledger.show('clm_rv', 20, 0, -1), code('VALIDATION'));
 });
-test('path order stays numeric across mixed timestamp precisions', t => {
-  const store = new SqliteStore(':memory:', true);
-  t.after(() => store.close());
-  const early = new Ledger(store, () => '2026-01-01T00:00:00Z');
-  const late = new Ledger(store, () => '2026-01-01T00:00:00.500Z');
-  early.capture(bundle([
-    { id: 'src_mx', type: 'source', data: { title: 't', medium: 'note', uri: 'urn:yurai:synthetic:mx' } },
-    claim('clm_mx'),
-    { id: 'evd_mx1', type: 'evidence', data: { source_id: 'src_mx', quote: 'MIXTERM one' } },
-    { id: 'evd_mx2', type: 'evidence', data: { source_id: 'src_mx', quote: 'MIXTERM two' } },
-    { id: 'asm_mx1', type: 'assessment', data: { claim_id: 'clm_mx', evidence_id: 'evd_mx1', stance: 'supports', rationale: 'r' } },
-  ], 'req_mx_1'));
-  late.capture(bundle([
-    { id: 'asm_mx2', type: 'assessment', data: { claim_id: 'clm_mx', evidence_id: 'evd_mx2', stance: 'supports', rationale: 'r' } },
-  ], 'req_mx_2'));
-  const found = late.search('MIXTERM', { expand: 'evidence' });
-  const item = found.items.find(v => v.entry.id === 'clm_mx');
-  assert.deepEqual(item.via.map(p => p.assessment.entry.id), ['asm_mx2', 'asm_mx1']);
-});
 test('show pages many reviews before an old challenge without losing it', t => {
-  const { ledger } = setup(t);
+  const { ledger } = memorySetup(t);
   ledger.capture(bundle([
     { id: 'src_mr', type: 'source', data: { title: 't', medium: 'note', uri: 'urn:yurai:synthetic:mr' } },
     claim('clm_mr', 'many reviews bury an old challenge MRQ'),
@@ -834,7 +831,7 @@ test('show pages many reviews before an old challenge without losing it', t => {
   assert.equal(challenge.entry.data.stance, 'challenges');
 });
 test('same-timestamp entries keep a deterministic id tie-break', t => {
-  const { ledger } = setup(t);
+  const { ledger } = memorySetup(t);
   ledger.capture(bundle([
     { id: 'src_st', type: 'source', data: { title: 't', medium: 'note', uri: 'urn:yurai:synthetic:st' } },
     { id: 'evd_st1', type: 'evidence', data: { source_id: 'src_st', quote: 'STX same-time anchor' } },
@@ -856,7 +853,7 @@ test('same-timestamp entries keep a deterministic id tie-break', t => {
   assert.deepEqual(paths.map(p => p.evidence.entry.id), ['evd_st1', 'evd_st2']);
 });
 test('paged reads reject malformed offsets, limits, and revisions', t => {
-  const { ledger } = setup(t);
+  const { ledger } = memorySetup(t);
   ledger.capture(bundle([claim('clm_mf')], 'req_mf'));
   for (const bad of [1.5, NaN, 1000001, '2', null])
     assert.throws(() => ledger.search('AI', { offset: bad }), code('VALIDATION'), `offset ${String(bad)}`);

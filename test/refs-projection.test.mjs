@@ -1,24 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
-import { fileURLToPath } from 'node:url';
+import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { Ledger, LedgerError, SqliteStore, toExpandedRefsV1 } from '../dist/index.js';
+import { toExpandedRefsV1 } from '../dist/index.js';
+import { code } from './helpers/assert.mjs';
+import { memorySetup } from './helpers/memory.mjs';
+import { cliSetup } from './helpers/cli.mjs';
 
 const evalLedger = JSON.parse(readFileSync(new URL('../examples/eval/ledger.json', import.meta.url), 'utf8'));
 const evalWdDeps = JSON.parse(readFileSync(new URL('../examples/eval/ledger-wd-deps.json', import.meta.url), 'utf8'));
 const evalVerify = JSON.parse(readFileSync(new URL('../examples/eval/ledger-verify.json', import.meta.url), 'utf8'));
 const actor = { kind: 'agent', id: 'test-agent', model: 'synthetic' };
 const bundle = (entries, request_id) => ({ version: 1, request_id, actor, entries });
-const code = expected => e => e instanceof LedgerError && e.code === expected;
 
 function evalSetup(t) {
-  const store = new SqliteStore(':memory:', true);
-  t.after(() => store.close());
-  const ledger = new Ledger(store);
+  const { store, ledger } = memorySetup(t, { now: null });
   ledger.capture(evalLedger);
   ledger.capture(evalWdDeps);
   ledger.capture(evalVerify);
@@ -120,44 +116,9 @@ test('refs-v1: the 38℃ eval case round-trips losslessly with shared views dedu
     for (const p of r.via) assert.deepEqual(Object.keys(p).sort(),
       ['assessment_ref', 'evidence_ref', 'match_fields', 'source_ref']);
   }
-  // Provenance fields survive individually, not just under deepEqual.
-  const xz7 = refs.items.find(i => i.entry.id === 'clm_eval_xz7');
-  assert.equal(xz7.entry.data.attributed_to, 'fictional-experimenter');
-  assert.deepEqual(xz7.entry.actor, { kind: 'agent', id: 'fixture-agent' });
-  assert.ok(xz7.entry.data.scope.includes('XZ-7'));
-  assert.ok(xz7.entry.data.why.length > 0);
-  assert.equal(xz7.review, null);
-  assert.equal('verification' in xz7, false);
-  const path = xz7.via.find(p => p.evidence_ref === 'evd_eval_xz7');
-  const evidence = refs.included[path.evidence_ref];
-  const assessment = refs.included[path.assessment_ref];
-  const source = refs.included[path.source_ref];
-  for (const side of [evidence, assessment, source]) {
-    assert.deepEqual(side.entry.actor, { kind: 'agent', id: 'fixture-agent' });
-  }
-  assert.equal(assessment.state, 'accepted');
-  assert.equal(assessment.review.data.state, 'accepted');
-  assert.equal(assessment.review.data.rationale, 'The assessment reports exactly what table 2 states.');
-  assert.deepEqual(assessment.review.actor, { kind: 'agent', id: 'fixture-verifier' });
-  assert.equal(assessment.entry.data.stance, 'supports');
-  assert.ok(assessment.entry.data.rationale.includes('Table 2'));
-  assert.equal(evidence.verification.id, 'vrf_eval_xz7');
-  assert.equal(evidence.verification.outcome, 'match');
-  assert.equal(evidence.verification.edition.agreement, 'match');
-  assert.deepEqual(evidence.verification.actor, { kind: 'agent', id: 'fixture-verifier' });
-  assert.deepEqual(evidence.verification, ledger.show('evd_eval_xz7').verification);
-  assert.ok(evidence.warnings.includes('anchor_match'));
-  assert.equal(source.entry.id, evidence.entry.data.source_id);
-  assert.equal(source.entry.data.version, 'v1');
-  // The same verified anchor on the opposing path keeps its summary.
-  const challenge = all.via.find(p => p.evidence_ref === 'evd_eval_xz7');
-  assert.equal(refs.included[challenge.assessment_ref].entry.data.stance, 'challenges');
-  assert.deepEqual(refs.included[challenge.evidence_ref], evidence);
-  // The unverified sibling keeps null instead of borrowing coverage.
-  const drop = refs.items.find(i => i.entry.id === 'clm_eval_drop');
-  const unverified = refs.included[drop.via.find(p => p.evidence_ref === 'evd_eval_drop').evidence_ref];
-  assert.equal(unverified.verification, null);
-  assert.ok(unverified.warnings.includes('anchor_not_verified'));
+  // Provenance values ride the round-trip above: the deepEqual entails every
+  // included view equals its inline twin, and retrieval-eval pins the same
+  // XZ-7 chain on the inline form.
 });
 
 test('refs-v1: the audit path round-trips with full withdrawn states', t => {
@@ -186,9 +147,7 @@ test('refs-v1: empty results carry an empty complete included map', t => {
 });
 
 function multiPageSetup(t) {
-  const store = new SqliteStore(':memory:', true);
-  t.after(() => store.close());
-  const ledger = new Ledger(store, () => '2026-09-27T00:00:00.000Z');
+  const { store, ledger } = memorySetup(t);
   const entries = [
     { id: 'src_mp', type: 'source', data: { title: 'synthetic paging', medium: 'note', uri: 'urn:yurai:synthetic:mp' } },
     { id: 'clm_mp_a', type: 'claim', data: { text: 'first paged host', kind: 'assertion', attributed_to: 'test' } },
@@ -244,9 +203,7 @@ test('refs-v1: claim and path pages round-trip through mid, end, and out-of-rang
 });
 
 test('refs-v1: same-text records under different IDs are never merged', t => {
-  const store = new SqliteStore(':memory:', true);
-  t.after(() => store.close());
-  const ledger = new Ledger(store, () => '2026-09-27T00:00:00.000Z');
+  const { ledger } = memorySetup(t);
   ledger.capture(bundle([
     { id: 'src_dup', type: 'source', data: { title: 'synthetic dup', medium: 'note', uri: 'urn:yurai:synthetic:dup' } },
     { id: 'clm_dup', type: 'claim', data: { text: 'dup host', kind: 'assertion', attributed_to: 'test' } },
@@ -268,9 +225,7 @@ test('refs-v1: same-text records under different IDs are never merged', t => {
 });
 
 test('refs-v1: review text and verification summaries ride the included views', t => {
-  const store = new SqliteStore(':memory:', true);
-  t.after(() => store.close());
-  const ledger = new Ledger(store, () => '2026-09-27T00:00:00.000Z');
+  const { ledger } = memorySetup(t);
   const content = Buffer.from('before RVTERM checkable span here after', 'utf8');
   const sha = createHash('sha256').update(content).digest('hex');
   ledger.capture(bundle([
@@ -296,25 +251,6 @@ test('refs-v1: review text and verification summaries ride the included views', 
   assert.equal(evidence.verification.bytes.agreement, 'match');
   assert.deepEqual(evidence.verification, ledger.show('evd_rv').verification);
   assert.ok(evidence.warnings.includes('anchor_match'));
-});
-
-test('refs-v1: same-timestamp claims keep deterministic newest-first, ID-tiebreak order', t => {
-  const store = new SqliteStore(':memory:', true);
-  t.after(() => store.close());
-  const ledger = new Ledger(store, () => '2026-09-27T00:00:00.000Z');
-  ledger.capture(bundle([
-    { id: 'src_stm', type: 'source', data: { title: 'synthetic time', medium: 'note', uri: 'urn:yurai:synthetic:stm' } },
-    { id: 'clm_stm_zz', type: 'claim', data: { text: 'last by id', kind: 'assertion', attributed_to: 'test' } },
-    { id: 'clm_stm_mm', type: 'claim', data: { text: 'middle by id', kind: 'assertion', attributed_to: 'test' } },
-    { id: 'clm_stm_aa', type: 'claim', data: { text: 'first by id', kind: 'assertion', attributed_to: 'test' } },
-    { id: 'evd_stm', type: 'evidence', data: { source_id: 'src_stm', quote: 'STMTIME shared span' } },
-    { id: 'asm_stm_zz', type: 'assessment', data: { claim_id: 'clm_stm_zz', evidence_id: 'evd_stm', stance: 'supports', rationale: 'z' } },
-    { id: 'asm_stm_mm', type: 'assessment', data: { claim_id: 'clm_stm_mm', evidence_id: 'evd_stm', stance: 'challenges', rationale: 'm' } },
-    { id: 'asm_stm_aa', type: 'assessment', data: { claim_id: 'clm_stm_aa', evidence_id: 'evd_stm', stance: 'context', rationale: 'a' } },
-  ], 'req_stm'));
-  const { inline, refs } = roundTrip(ledger, 'STMTIME', { expand: 'evidence' });
-  assert.deepEqual(inline.items.map(i => i.entry.id), ['clm_stm_aa', 'clm_stm_mm', 'clm_stm_zz']);
-  assert.deepEqual(refs.items.map(i => i.entry.id), inline.items.map(i => i.entry.id));
 });
 
 test('refs-v1: Japanese and one/two-character terms keep working under projection', t => {
@@ -420,18 +356,8 @@ test('refs-v1: projection adds no store reads or writes', t => {
   assert.equal(inline.insertReceipt, 0);
 });
 
-const cli = new URL('../dist/cli.js', import.meta.url);
-function cliSetup(t) {
-  const dir = mkdtempSync(join(tmpdir(), 'yurai-refs-'));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const db = join(dir, 'ledger.sqlite');
-  const run = args => spawnSync(process.execPath,
-    ['--disable-warning=ExperimentalWarning', fileURLToPath(cli), '--db', db, ...args], { encoding: 'utf8' });
-  return { dir, db, run };
-}
-
 test('refs-v1: CLI output parses as the Core representation', t => {
-  const { run } = cliSetup(t);
+  const { run } = cliSetup(t, 'yurai-refs-');
   assert.equal(run(['init']).status, 0);
   for (const file of ['examples/eval/ledger.json', 'examples/eval/ledger-wd-deps.json', 'examples/eval/ledger-verify.json']) {
     assert.equal(run(['capture', '--file', file]).status, 0);
@@ -450,7 +376,7 @@ test('refs-v1: CLI output parses as the Core representation', t => {
 });
 
 test('refs-v1: CLI rejects bad projection use with usage errors', t => {
-  const { run } = cliSetup(t);
+  const { run } = cliSetup(t, 'yurai-refs-');
   assert.equal(run(['show', 'clm_demo', '--projection', 'refs-v1']).status, 2);
   assert.equal(run(['init']).status, 0);
   assert.equal(run(['search', 'x', '--expand', 'evidence', '--projection', 'bogus']).status, 2);

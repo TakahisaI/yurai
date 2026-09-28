@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { Ledger, SqliteStore } from '../dist/index.js';
+import { memorySetup } from './helpers/memory.mjs';
 
 // Issue #39 judgment-trail trial: all fixtures are synthetic. Each test builds a
 // fresh disposable in-memory ledger, so the "fresh context" reuse pass (box 5) is
@@ -11,9 +11,7 @@ const bundles = files.map(f => JSON.parse(readFileSync(new URL(`../examples/judg
 const TOTAL_RECORDS = bundles.reduce((n, b) => n + b.entries.length, 0);
 
 function setup(t, count = bundles.length) {
-  const store = new SqliteStore(':memory:', true);
-  t.after(() => store.close());
-  const ledger = new Ledger(store);
+  const { store, ledger } = memorySetup(t, { now: null });
   for (const bundle of bundles.slice(0, count)) {
     const result = ledger.capture(bundle);
     assert.equal(result.replayed, false);

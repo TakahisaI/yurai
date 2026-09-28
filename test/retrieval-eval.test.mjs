@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { Ledger, SqliteStore } from '../dist/index.js';
+import { memorySetup } from './helpers/memory.mjs';
 
 const ledger = JSON.parse(readFileSync(new URL('../examples/eval/ledger.json', import.meta.url), 'utf8'));
 const ledgerWdDeps = JSON.parse(readFileSync(new URL('../examples/eval/ledger-wd-deps.json', import.meta.url), 'utf8'));
@@ -10,8 +10,7 @@ const ledgerVerify = JSON.parse(readFileSync(new URL('../examples/eval/ledger-ve
 const queries = JSON.parse(readFileSync(new URL('../examples/eval/queries.json', import.meta.url), 'utf8'));
 
 function setup() {
-  const store = new SqliteStore(':memory:', true);
-  const ledgerApi = new Ledger(store);
+  const { store, ledger: ledgerApi } = memorySetup(null, { now: null });
   ledgerApi.capture(ledger);
   ledgerApi.capture(ledgerWdDeps);
   ledgerApi.capture(ledgerVerify);
@@ -111,52 +110,41 @@ test('retrieval eval: exact claim sets and exact routed-path sets', t => {
   assert.deepEqual(failures, []);
 });
 
-test('retrieval eval: the universal claim keeps supporting and challenging assessments apart', t => {
+test('retrieval eval: claims keep supporting, challenging, and qualifying links apart', t => {
   const { store, ledgerApi } = setup();
   t.after(() => store.close());
-  const view = ledgerApi.show('clm_eval_all');
-  const stances = new Set(view.connections
+  const all = ledgerApi.show('clm_eval_all');
+  const stances = new Set(all.connections
     .filter(c => c.entry.type === 'assessment')
     .map(c => c.entry.data.stance));
   assert.deepEqual(stances, new Set(['supports', 'challenges']));
-});
-
-test('retrieval eval: the scoped drop claim takes no challenges, only qualification', t => {
-  const { store, ledgerApi } = setup();
-  t.after(() => store.close());
-  const view = ledgerApi.show('clm_eval_drop');
-  const stances = view.connections
+  const drop = ledgerApi.show('clm_eval_drop');
+  const dropStances = drop.connections
     .filter(c => c.entry.type === 'assessment')
     .map(c => c.entry.data.stance);
-  assert.ok(!stances.includes('challenges'));
-  const relations = view.connections.filter(c => c.entry.type === 'relation');
+  assert.ok(!dropStances.includes('challenges'));
+  const relations = drop.connections.filter(c => c.entry.type === 'relation');
   assert.ok(relations.some(c => c.entry.data.relation === 'qualifies'));
 });
 
-test('retrieval eval: withdrawn evidence path keeps full states on the audit path', t => {
+test('retrieval eval: withdrawn paths keep full states on the audit path', t => {
   const { store, ledgerApi } = setup();
   t.after(() => store.close());
-  const result = ledgerApi.search('OLDTERM', { expand: 'evidence', includeInactive: true });
-  const item = result.items.find(i => i.entry.id === 'clm_eval_drop');
-  assert.ok(item);
-  assert.ok(item.via.length > 0);
-  assert.equal(item.state, 'proposed');
-  assert.equal(item.via[0].evidence.state, 'withdrawn');
-  assert.equal(item.via[0].assessment.state, 'proposed');
-  assert.equal(item.via[0].source.state, 'proposed');
-});
-
-test('retrieval eval: withdrawn assessment path keeps full states on the audit path', t => {
-  const { store, ledgerApi } = setup();
-  t.after(() => store.close());
-  const result = ledgerApi.search('WDASMTERM', { expand: 'evidence', includeInactive: true });
-  const item = result.items.find(i => i.entry.id === 'clm_eval_drop');
-  assert.ok(item);
-  assert.ok(item.via.length > 0);
-  assert.equal(item.state, 'proposed');
-  assert.equal(item.via[0].evidence.state, 'proposed');
-  assert.equal(item.via[0].assessment.state, 'withdrawn');
-  assert.equal(item.via[0].source.state, 'proposed');
+  const cases = [
+    ['OLDTERM', 'evidence'],
+    ['WDASMTERM', 'assessment'],
+    ['WDSRCTERM', 'source'],
+  ];
+  for (const [term, withdrawn] of cases) {
+    const result = ledgerApi.search(term, { expand: 'evidence', includeInactive: true });
+    const item = result.items.find(i => i.entry.id === 'clm_eval_drop');
+    assert.ok(item, term);
+    assert.ok(item.via.length > 0, term);
+    assert.equal(item.state, 'proposed', term);
+    for (const side of ['evidence', 'assessment', 'source']) {
+      assert.equal(item.via[0][side].state, side === withdrawn ? 'withdrawn' : 'proposed', `${term}: ${side}`);
+    }
+  }
 });
 
 test('retrieval eval: routed results carry paths, never corroboration counts', t => {
@@ -180,19 +168,6 @@ test('retrieval eval: routed results carry paths, never corroboration counts', t
   }
 });
 
-test('retrieval eval: withdrawn source path keeps full states on the audit path', t => {
-  const { store, ledgerApi } = setup();
-  t.after(() => store.close());
-  const result = ledgerApi.search('WDSRCTERM', { expand: 'evidence', includeInactive: true });
-  const item = result.items.find(i => i.entry.id === 'clm_eval_drop');
-  assert.ok(item);
-  assert.ok(item.via.length > 0);
-  assert.equal(item.state, 'proposed');
-  assert.equal(item.via[0].evidence.state, 'proposed');
-  assert.equal(item.via[0].assessment.state, 'proposed');
-  assert.equal(item.via[0].source.state, 'withdrawn');
-});
-
 test('retrieval eval: routed paths preserve review, verification, and provenance', t => {
   const { store, ledgerApi } = setup();
   t.after(() => store.close());
@@ -204,6 +179,8 @@ test('retrieval eval: routed paths preserve review, verification, and provenance
   assert.deepEqual(item.entry.actor, { kind: 'agent', id: 'fixture-agent' });
   assert.ok(item.entry.data.scope.includes('XZ-7'));
   assert.ok(item.entry.data.why.length > 0);
+  assert.equal(item.review, null);
+  assert.equal(ledgerApi.show('clm_eval_xz7').review, null);
   const path = item.via.find(v => v.evidence.entry.id === 'evd_eval_xz7');
   assert.ok(path);
   for (const side of [path.evidence, path.assessment, path.source]) {
@@ -230,6 +207,7 @@ test('retrieval eval: routed paths preserve review, verification, and provenance
   // The accepted assessment carries its review, stance, and rationale.
   assert.equal(path.assessment.state, 'accepted');
   assert.equal(path.assessment.review.data.state, 'accepted');
+  assert.equal(path.assessment.review.data.rationale, 'The assessment reports exactly what table 2 states.');
   assert.deepEqual(path.assessment.review, ledgerApi.show('asm_eval_xz7').review);
   assert.equal(path.assessment.entry.data.stance, 'supports');
   assert.ok(path.assessment.entry.data.rationale.includes('Table 2'));

@@ -2,9 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { Ledger, SqliteStore } from '../dist/index.js';
-import { LedgerError, parseSnapshot, references } from '../dist/core/model.js';
+import { Ledger } from '../dist/index.js';
+import { parseSnapshot, references } from '../dist/core/model.js';
 import { classifySameId, exactEntryEquals, isLedgerId, outcomeFor } from '../dist/core/mergeIdentity.js';
+import { code } from './helpers/assert.mjs';
+import { memorySetup } from './helpers/memory.mjs';
 
 // Synthetic conformance cases for issue #32 / ADR 0012. Fixture
 // assertions plus read-path behavior pins on synthetic ledgers only:
@@ -17,7 +19,6 @@ import { classifySameId, exactEntryEquals, isLedgerId, outcomeFor } from '../dis
 
 const dir = new URL('./fixtures/merge-semantics/', import.meta.url);
 const load = name => JSON.parse(readFileSync(new URL(name, dir), 'utf8'));
-const code = expected => e => e instanceof LedgerError && e.code === expected;
 const noTombstones = () => false;
 
 /** ADR 0012 §1: naive latest-by-arrival — the trap an old foreign event sets. */
@@ -68,11 +69,6 @@ function planRefusalKind(local, artifactEntries) {
 /** Synthetic-ledger helpers for the M12–M15 behavior pins. */
 const bundleActor = { kind: 'agent', id: 'synthetic-local-recorder', model: 'synthetic' };
 const toInputs = entries => entries.map(({ id, type, data }) => ({ id, type, data }));
-function setup(t) {
-  const store = new SqliteStore(':memory:', true);
-  t.after(() => store.close());
-  return { store, ledger: new Ledger(store, () => '2026-09-27T00:00:00.000Z') };
-}
 function reviewOrder(entries) {
   const order = new Map();
   for (const e of entries) {
@@ -529,7 +525,7 @@ test('merge-semantics: refusals are decided pre-write and leave the ledger uncha
   }
   // Refusal-path atomicity pinned on existing machinery: a refused restore
   // leaves records, receipts, index, and revision identical.
-  const { store, ledger } = setup(t);
+  const { store, ledger } = memorySetup(t);
   const { local } = load('overlapping-corrections.json');
   const { foreign_snapshot } = load('missing-dependency.json');
   ledger.capture({ version: 1, request_id: 'req_mrg_m12', actor: bundleActor, entries: toInputs(local) });
@@ -542,11 +538,11 @@ test('merge-semantics: refusals are decided pre-write and leave the ledger uncha
 
 test('merge-semantics: export/restore round-trips entries, receipts, and event order (M13)', t => {
   const { foreign_snapshot, expected } = load('preserved-testimony.json');
-  const { ledger } = setup(t);
+  const { ledger } = memorySetup(t);
   ledger.capture({ version: 1, request_id: 'req_mrg_m13', actor: bundleActor,
     entries: toInputs(foreign_snapshot.entries) });
   const exported = ledger.exportSnapshot();
-  const other = setup(t);
+  const other = memorySetup(t);
   other.ledger.importSnapshot(exported);
   const restored = other.ledger.exportSnapshot();
   // Entries, receipts, and per-target event order survive (ADR 0008 §13 style).
@@ -566,7 +562,7 @@ test('merge-semantics: export/restore round-trips entries, receipts, and event o
 });
 
 test('merge-semantics: direct search keeps literal AND, Japanese terms, paging, warnings, actor (M14)', t => {
-  const { ledger } = setup(t);
+  const { ledger } = memorySetup(t);
   const { foreign_snapshot } = load('preserved-testimony.json');
   ledger.capture({ version: 1, request_id: 'req_mrg_m14', actor: bundleActor,
     entries: toInputs(foreign_snapshot.entries) });
@@ -598,7 +594,7 @@ test('merge-semantics: direct search keeps literal AND, Japanese terms, paging, 
 });
 
 test('merge-semantics: expanded discovery keeps routing, via, totals, and truncation markers (M15)', t => {
-  const { ledger } = setup(t);
+  const { ledger } = memorySetup(t);
   const { foreign_snapshot } = load('preserved-testimony.json');
   ledger.capture({ version: 1, request_id: 'req_mrg_m15', actor: bundleActor,
     entries: toInputs(foreign_snapshot.entries) });

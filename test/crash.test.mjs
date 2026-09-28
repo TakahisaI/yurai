@@ -1,20 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn, spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
+import { cliSetup } from './helpers/cli.mjs';
 const writer = fileURLToPath(new URL('./helpers/crash-writer.mjs', import.meta.url));
-function setup(t) {
-  const dir = mkdtempSync(join(tmpdir(), 'yurai-crash-'));
-  const db = join(dir, 'ledger.sqlite');
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const run = args => spawnSync(process.execPath,
-    ['--disable-warning=ExperimentalWarning', cli, '--db', db, ...args], { encoding: 'utf8' });
-  return { dir, db, run };
-}
 function runCrashWriter(db, mode) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', writer, db, mode]);
@@ -30,7 +21,7 @@ function runCrashWriter(db, mode) {
   });
 }
 function seed(t) {
-  const { dir, db, run } = setup(t);
+  const { dir, db, run } = cliSetup(t, 'yurai-crash-');
   assert.equal(run(['init']).status, 0);
   const file = join(dir, 'seed.json');
   writeFileSync(file, JSON.stringify({ version: 1, request_id: 'req_crash_seed',

@@ -24,19 +24,20 @@ export interface LedgerObserver {
  * contribute 1 on hit / 0 on miss, scalar calls contribute 0. Writes are
  * counted separately: each void write contributes 1 row written and 0 rows
  * returned, so rowsReturned means what it says. */
-export type StoreMethod =
-  'transaction' | 'get' | 'insert' | 'latestReview' | 'latestVerification' |
-  'schemaVersion' | 'incoming' | 'search' | 'entries' | 'receipt' |
-  'receipts' | 'insertReceipt' | 'count' | 'revision';
+/** Every Store method, in one list: the union derives from it and
+ *  `emptyStats` iterates it, so adding a method cannot silently desync stats. */
+const STORE_METHODS = ['transaction', 'get', 'insert', 'latestReview', 'latestVerification',
+  'schemaVersion', 'incoming', 'search', 'entries', 'receipt',
+  'receipts', 'insertReceipt', 'count', 'revision'] as const;
+
+export type StoreMethod = typeof STORE_METHODS[number];
 
 export interface MethodStats { calls: number; rowsReturned: number; rowsWritten: number; }
 export type StoreCallStats = Record<StoreMethod, MethodStats>;
 
 function emptyStats(): StoreCallStats {
   const stats = {} as StoreCallStats;
-  for (const m of ['transaction', 'get', 'insert', 'latestReview', 'latestVerification',
-    'schemaVersion', 'incoming', 'search', 'entries', 'receipt',
-    'receipts', 'insertReceipt', 'count', 'revision'] as const)
+  for (const m of STORE_METHODS)
     stats[m] = { calls: 0, rowsReturned: 0, rowsWritten: 0 };
   return stats;
 }

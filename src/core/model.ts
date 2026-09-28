@@ -31,6 +31,32 @@ export class LedgerError extends Error {
 }
 export function fail(code: string, message: string): never { throw new LedgerError(code, message); }
 
+/** Ledger ID grammar (contract §IDs): leading letter, 2–128 chars. The
+ *  regex pins the shape; the 128 cap lives with it so schema and runtime
+ *  checks share one definition. The schema pattern string below reuses
+ *  `ID_PATTERN.source` verbatim, keeping emitted JSON Schema byte-stable. */
+export const ID_PATTERN = /^[A-Za-z][A-Za-z0-9_.:-]+$/;
+export const ID_MAX_LENGTH = 128;
+
+/**
+ * Canonical JSON: object keys sorted recursively so that key ORDER never
+ * affects comparison. Strings (including quotes, Unicode, DOI text, and
+ * identifiers) pass through `JSON.stringify` byte-identically: no trimming,
+ * no case folding, no Unicode normalization, no quote rewriting. This matches
+ * the ledger receipt digest's treatment of stored strings (see `canonical`
+ * in ledger.ts) and deliberately differs from search normalization
+ * (`normalize` below), which must never feed an equality test.
+ *
+ * Single definition for all of Core: plan digests, merge-identity equality,
+ * and refs-v1 view comparison share these bytes.
+ */
+export function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  return `{${Object.keys(value).sort().map(k =>
+    `${JSON.stringify(k)}:${canonicalJson((value as Record<string, unknown>)[k])}`).join(',')}}`;
+}
+
 // A deliberately small JSON Schema subset. The very same definitions drive validation
 // and `yurai schema`; unknown keys fail instead of silently discarding agent input.
 type Schema = { type?: string; const?: unknown; enum?: readonly string[]; properties?: Record<string, Schema>;
@@ -44,7 +70,7 @@ const object = (properties: Record<string, Schema>, required = Object.keys(prope
   ({ type: 'object', properties, required, additionalProperties: false });
 const array = (items: Schema, minItems = 0, maxItems = 100000): Schema =>
   ({ type: 'array', items, minItems, maxItems });
-const id: Schema = { ...text(128), pattern: '^[A-Za-z][A-Za-z0-9_.:-]+$' };
+const id: Schema = { ...text(ID_MAX_LENGTH), pattern: ID_PATTERN.source };
 const timestamp: Schema = { ...text(32), pattern: '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{3})?Z$' };
 const hash: Schema = { ...text(64), pattern: '^[a-f0-9]{64}$' };
 const actorSchema = object({ kind: choice('human', 'agent', 'import'), id: text(200),
@@ -69,9 +95,16 @@ const bodySchemas: Record<Kind, Schema> = {
     occurrence_offsets: array(integer(), 0, 50), edition: text(500) },
     ['target_evidence_id', 'target_source_id', 'outcome', 'method', 'verified_at']),
 };
-const kinds = Object.keys(bodySchemas) as Kind[];
-const inputSchemas = kinds.map(type => object({ id, type: { const: type }, data: bodySchemas[type] }));
-const entrySchemas = kinds.map(type => object({ id, type: { const: type }, data: bodySchemas[type],
+/** All known record kinds, in canonical order. Single definition: record
+ *  variants register here, and every kind check shares it. */
+export const KINDS: readonly Kind[] = Object.keys(bodySchemas) as Kind[];
+/** True for kinds the canonical reference table knows. Runtime guard for
+ *  values arriving as `Kind` by cast but unknown to this build. */
+export function isKnownKind(kind: string): kind is Kind {
+  return (KINDS as readonly string[]).includes(kind);
+}
+const inputSchemas = KINDS.map(type => object({ id, type: { const: type }, data: bodySchemas[type] }));
+const entrySchemas = KINDS.map(type => object({ id, type: { const: type }, data: bodySchemas[type],
   created_at: timestamp, actor: actorSchema }));
 export const bundleSchema = object({ version: { const: 1 }, request_id: id, actor: actorSchema,
   entries: array({ oneOf: inputSchemas }, 1, 200) });
@@ -127,7 +160,7 @@ function semantic(input: Input): void {
       try { new URL(uri); } catch { fail('VALIDATION', `${input.id}: expected absolute URI; it will not be fetched`); }
     }
     const t = input.data.accessed_at;
-    if (t && !validTime(t)) fail('VALIDATION', `${input.id}: invalid accessed_at`);
+    if (t && !isValidTimestamp(t)) fail('VALIDATION', `${input.id}: invalid accessed_at`);
     if (!input.data.uri && !Object.keys(input.data.identifiers ?? {}).length)
       fail('VALIDATION', `${input.id}: source needs uri or at least one identifier`);
   }
@@ -135,7 +168,7 @@ function semantic(input: Input): void {
     fail('VALIDATION', `${input.id}: self-relations are not allowed`);
   if (input.type === 'verification') {
     const d = input.data, no = (...keys: (keyof typeof d)[]) => keys.some(k => d[k] !== undefined);
-    if (!validTime(d.verified_at)) fail('VALIDATION', `${input.id}: invalid verified_at`);
+    if (!isValidTimestamp(d.verified_at)) fail('VALIDATION', `${input.id}: invalid verified_at`);
     if (d.outcome === 'unreachable') {
       if (!d.detail) fail('VALIDATION', `${input.id}: unreachable needs a reason in detail`);
       if (no('searched_sha256', 'searched_bytes', 'passage_sha256', 'byte_offset', 'byte_length', 'occurrences', 'occurrence_offsets'))
@@ -160,7 +193,11 @@ function semantic(input: Input): void {
     }
   }
 }
-function validTime(t: string): boolean {
+/** True when `t` is a valid UTC timestamp accepting the two `created_at`
+ *  spellings (`...SSZ` and `...SS.sssZ`): it must parse AND round-trip
+ *  through `toISOString`, so overflow dates like February 30 fail. Single
+ *  definition shared with the planner's `redactedAt` check. */
+export function isValidTimestamp(t: string): boolean {
   const n = Date.parse(t);
   return Number.isFinite(n) && new Date(n).toISOString() === (t.length === 20 ? t.replace('Z', '.000Z') : t);
 }
@@ -173,7 +210,7 @@ export function parseBundle(value: unknown): Bundle {
 export function parseSnapshot(value: unknown): Snapshot {
   validate(value, snapshotSchema, 'snapshot');
   const snapshot = value as Snapshot;
-  snapshot.entries.forEach(e => { semantic(e); if (!validTime(e.created_at)) fail('VALIDATION', `${e.id}: invalid created_at`); });
+  snapshot.entries.forEach(e => { semantic(e); if (!isValidTimestamp(e.created_at)) fail('VALIDATION', `${e.id}: invalid created_at`); });
   return snapshot;
 }
 export function references(input: Input): { id: string; role: string; kind: Kind | 'reviewable' }[] {
