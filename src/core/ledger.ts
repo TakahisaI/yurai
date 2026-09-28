@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { LedgerError, fail, matchedEvidenceFields, normalize, pageBounds, parseBundle, parseSnapshot, references } from './model.js';
 import type { Actor, Entry, EvidenceField, Input, Snapshot, State } from './model.js';
 import type { Store } from './ports.js';
+import type { LedgerObserver, ScanKind } from './observe.js';
 import { MAX_VERIFY_BYTES, matchQuote } from './verify.js';
 import { toExpandedRefsV1 } from './refs.js';
 
@@ -17,7 +18,14 @@ function sameVerifier(stored: Actor, claimed: { kind: string; id: string; model?
 }
 type VerificationData = Extract<Input, { type: 'verification' }>['data'];
 export class Ledger {
-  constructor(private readonly store: Store, private readonly now = () => new Date().toISOString()) {}
+  constructor(private readonly store: Store, private readonly now = () => new Date().toISOString(),
+    private readonly observer?: LedgerObserver) {}
+  private note(kind: ScanKind, recordsExamined: number): void {
+    if (!this.observer) return;
+    // Assess-only: an observer failure must never change results, errors, or
+    // transaction outcomes, so it is swallowed here.
+    try { this.observer.scan(kind, recordsExamined); } catch { /* ignore */ }
+  }
   private required(id: string): Entry { return this.store.get(id) ?? fail('NOT_FOUND', `No record: ${id}`); }
   private checkReferences(inputs: Input[]): void {
     const byId = new Map<string, Input>();
@@ -41,7 +49,9 @@ export class Ledger {
         fail('VALIDATION', `${input.id}: verification target has no quote to match`);
     }
     // Supersession is historical replacement, not a general reasoning edge.
-    const replacements = [...this.store.entries(), ...inputs].filter(e => e.type === 'relation' && e.data.relation === 'supersedes');
+    const all = [...this.store.entries(), ...inputs];
+    this.note('supersedes-check', all.length);
+    const replacements = all.filter(e => e.type === 'relation' && e.data.relation === 'supersedes');
     const next = new Map<string, string[]>();
     for (const e of replacements) if (e.type === 'relation')
       next.set(e.data.from_claim_id, [...(next.get(e.data.from_claim_id) ?? []), e.data.to_claim_id]);
@@ -217,7 +227,9 @@ export class Ledger {
     }
     type Path = { evidence: Entry; assessment: Entry; source: Entry; match_fields: EvidenceField[] };
     const routed = new Map<string, { claim: Entry; paths: Path[] }>();
-    for (const evidence of this.store.entries()) {
+    const candidates = this.store.entries();
+    this.note('expanded-evidence', candidates.length);
+    for (const evidence of candidates) {
       if (evidence.type !== 'evidence') continue;
       const match_fields = matchedEvidenceFields(evidence.data, tokens);
       if (!match_fields.length) continue;
@@ -297,8 +309,11 @@ export class Ledger {
     });
   }
   exportSnapshot(): Snapshot {
-    return this.store.transaction(() => ({ format: 'yurai.snapshot', version: 1,
-      entries: this.store.entries(), receipts: this.store.receipts() }));
+    return this.store.transaction(() => {
+      const entries = this.store.entries();
+      this.note('export', entries.length);
+      return { format: 'yurai.snapshot' as const, version: 1 as const, entries, receipts: this.store.receipts() };
+    });
   }
   importSnapshot(value: unknown) {
     const snapshot = parseSnapshot(value);
