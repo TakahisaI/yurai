@@ -230,6 +230,7 @@ test('retrieval eval: routed paths preserve review, verification, and provenance
   // The accepted assessment carries its review, stance, and rationale.
   assert.equal(path.assessment.state, 'accepted');
   assert.equal(path.assessment.review.data.state, 'accepted');
+  assert.deepEqual(path.assessment.review, ledgerApi.show('asm_eval_xz7').review);
   assert.equal(path.assessment.entry.data.stance, 'supports');
   assert.ok(path.assessment.entry.data.rationale.includes('Table 2'));
   // Provenance: the attached source is the evidence's own declared source.
