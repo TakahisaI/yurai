@@ -268,6 +268,46 @@ per-ID), receipts, and registry digests as sets, plus a per-target
 Review/Verification event-order gate; bytewise SQLite-file equality is
 not required. See ADR 0008.
 
+## Merge retries vs origin receipts (proposed contract; no merge yet)
+
+Proposed future contract from ADR 0011 — not current behavior. `import`
+stays whole-snapshot restore into an empty ledger; no merge entry point
+exists.
+
+A future merge keeps three identities apart: the local merge-operation
+request (ledger-scoped retry identity: same request plus same
+artifact/selection/policy/namespace/pairing replays, any difference
+conflicts — including a retried request under a different import
+namespace or a changed shared-history pairing declaration;
+JSON-RPC/process IDs never count), the immutable imported
+artifact/selection, and origin capture requests/receipts (foreign
+execution history, provenance only). Origin receipts are never installed
+as local capture receipts; the merge mints fresh local receipts. Equal
+request strings in unrelated ledgers prove nothing; origin-less repeats
+refuse until the operator supplies distinct import namespaces.
+
+The importer identity lives on the merge operation; imported entries
+keep their foreign actor/`created_at` byte-identical. Paths, DOIs, URIs,
+and user-supplied origin strings never prove historical sameness, and
+provenance is self-reported, never authentication.
+
+Local request-digest barriers run before any remap/admission step.
+Same-ID tombstone/full-body pairs conflict in both directions; foreign
+registries are neither consulted nor unioned; foreign-internal
+receipt/registry and tombstone/verification contradictions refuse the
+artifact whole; imported deletion metadata never deletes local records
+or drops local receipts. No universal resurrection prevention is claimed:
+rewritten request IDs, fully purged record IDs, and newly keyed content
+are undetectable (except an explicitly paired shared-history re-supply
+of the purged request string, refused per C9), and uncertain admission
+refuses. Zero-create merges
+refuse until their receipt shape settles (P9), and the importer-actor
+recording awaits a bundle shape that the current receipts row cannot
+hold. See ADR 0011, including the
+PROVISIONAL register (P1–P11) for clauses awaiting #23 boxes 3–4
+decisions, a #23-owned tombstone-transfer decision, #31-final
+integration, or #32 selection mechanics.
+
 ## Snapshot
 
 `format=yurai.snapshot`, `version=1`, entries, receipts, and — once ADR 0008 is implemented — the optional `registry` extension (above; rejected by current readers). Each entry carries created_at and actor.
