@@ -15,7 +15,7 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Ledger, SqliteStore } from '../dist/index.js';
+import { CountingStore, Ledger, ScanCollector, SqliteStore } from '../dist/index.js';
 
 if (typeof globalThis.gc !== 'function') {
   console.error('measure-scale: rerun as `node --expose-gc scripts/measure-scale.mjs`; heap deltas need GC control.');
@@ -53,8 +53,18 @@ function buildLedger({ claims, evdPerClaim, asmPerEvd, reviewsPerClaim, verifica
   const rand = rng(20260927);
   const dir = mkdtempSync(join(tmpdir(), 'yurai-scale-'));
   const dbPath = join(dir, 'ledger.sqlite');
-  const store = new SqliteStore(dbPath, true);
-  const ledger = new Ledger(store, () => AT);
+  const raw = new SqliteStore(dbPath, true);
+  // Assess-only hooks (#44): timed paths run on the same unwrapped store as
+  // pre-instrumentation baselines (no decorator, no observer), so warm/cold
+  // comparisons and baseline continuity hold. Counting runs in a separate
+  // deterministic pass per operation on a wrapped view of a separately
+  // built same-shape store (parity is pinned by
+  // test/instrumentation.test.mjs).
+  const ledger = new Ledger(raw, () => AT);
+  const counting = new CountingStore(raw);
+  const scans = new ScanCollector();
+  const countingLedger = new Ledger(counting, () => AT, scans);
+  const store = raw;
   const pick = () => WORDS[Math.floor(rand() * WORDS.length)];
   const counts = { source: 0, claim: 0, evidence: 0, assessment: 0, review: 0, verification: 0, relation: 0 };
   const started = performance.now();
@@ -102,7 +112,7 @@ function buildLedger({ claims, evdPerClaim, asmPerEvd, reviewsPerClaim, verifica
     ledger.capture({ version: 1, request_id: `req_scale_${c}`, actor, entries });
   }
   const buildMs = performance.now() - started;
-  return { dir, dbPath, store, ledger, counts, buildMs };
+  return { dir, dbPath, store, ledger, countingLedger, counting, scans, counts, buildMs };
 }
 
 function summarize(samples) {
@@ -117,6 +127,25 @@ function time(fn, runs = 4) {
   const samples = [];
   for (let i = 0; i < runs; i++) { const t = performance.now(); fn(); samples.push(performance.now() - t); }
   return summarize(samples);
+}
+
+// One deterministic cost sample per operation: per-method Store-method calls
+// with rows returned and rows written [calls, rows returned, rows written],
+// total Store-method calls, total rows returned, total rows written, and
+// Ledger-level full-scan reports (records examined at the Ledger level —
+// never SQL statements issued or rows examined inside SQLite, which stay an
+// explicit follow-up under #44). Only nonzero entries are kept. Cold paths
+// are not re-counted: they run the same Ledger code over the same rows, so
+// warm counts apply (the parity test proves hooks change nothing).
+function costOf(counting, scans, fn) {
+  counting.reset(); scans.reset(); fn();
+  const calls = {};
+  let storeMethodCalls = 0, rowsReturned = 0, rowsWritten = 0;
+  for (const [method, s] of Object.entries(counting.snapshot()))
+    if (s.calls) { calls[method] = [s.calls, s.rowsReturned, s.rowsWritten]; storeMethodCalls += s.calls; rowsReturned += s.rowsReturned; rowsWritten += s.rowsWritten; }
+  const scanOut = {};
+  for (const [kind, n] of Object.entries(scans.snapshot())) if (n) scanOut[kind] = n;
+  return { store_method_calls: storeMethodCalls, rows_returned: rowsReturned, rows_written: rowsWritten, calls, scans: scanOut };
 }
 
 // Cold: one fresh store open per repetition (open + query + close per sample,
@@ -187,16 +216,42 @@ for (const shape of SCALES) {
   snapshotJson = null;
   parsed = null;
   const heapAfterRelease = heapBytes();
-  // Capture probes run last so export/import match the advertised counts.
-  // Each timing is capture() wall time: it includes pre-txn bundle validation
-  // (parseBundle+digest, ~0.05ms single / ~1.1ms batch-20), so it is an upper
-  // bound on the IMMEDIATE hold, not an OS-level lock measurement. Both probes
-  // run the same checkReferences path, so the batch amortizes the per-txn
-  // full-ledger supersedes scan over 20 records — but the pre-txn validation
-  // share (~1.1ms of the batch-20 total) is per-bundle work, not per-txn hold,
-  // so "batch per record" divides a mixed cost. Timed batch samples run at
-  // +25..+85 probe records over the shape base (negligible at scale, up to
-  // ~+4-10% on flat-100 absolute).
+  // Cost pass runs on a separately built pristine-shape DB (same seeded
+  // shape, so identical counts), leaving the main DB untouched at the
+  // advertised base for the capture timing probes below — prior-harness
+  // parity: timed probes scan the same base they did before
+  // instrumentation. Each entry describes the advertised counts:
+  // read/export scans report the shape base, and capture_single's
+  // supersedes scan is base + 1 input record (it runs last within the
+  // cost pass). The cost DB is closed and removed before the probes run,
+  // and the capture-delta heap boundary below includes the cost pass plus
+  // the probes.
+  const costShape = buildLedger(shape);
+  const cost = {
+    direct_common: costOf(costShape.counting, costShape.scans, () => costShape.countingLedger.search('COMMONTERM', { limit: 50 })),
+    direct_rare: costOf(costShape.counting, costShape.scans, () => costShape.countingLedger.search(`CLAIMRARE${shape.claims - 1}`, { limit: 50 })),
+    direct_short_2char: costOf(costShape.counting, costShape.scans, () => costShape.countingLedger.search('気孔', { limit: 50 })),
+    expanded: costOf(costShape.counting, costShape.scans, () => costShape.countingLedger.search('RARE7_0', { limit: 50, expand: 'evidence' })),
+    show: costOf(costShape.counting, costShape.scans, () => costShape.countingLedger.show('clm_m0007')),
+    export: costOf(costShape.counting, costShape.scans, () => costShape.countingLedger.exportSnapshot()),
+    capture_single: costOf(costShape.counting, costShape.scans, () => costShape.countingLedger.capture({ version: 1, request_id: `req_cost_${shape.name}`,
+      actor, entries: [{ id: `clm_cost_${shape.name}`, type: 'claim',
+        data: { text: 'cost probe', kind: 'assertion', attributed_to: 'syn' } }] })),
+  };
+  costShape.store.close();
+  rmSync(costShape.dir, { recursive: true, force: true });
+  // Capture probes run after export/import so those match the advertised
+  // counts. Each timing is capture() wall time: it includes pre-txn bundle
+  // validation (parseBundle+digest, ~0.05ms single / ~1.1ms batch-20), so it
+  // is an upper bound on the IMMEDIATE hold, not an OS-level lock
+  // measurement. Both probes run the same checkReferences path, so the batch
+  // amortizes the per-txn full-ledger supersedes scan over 20 records — but
+  // the pre-txn validation share (~1.1ms of the batch-20 total) is per-bundle
+  // work, not per-txn hold, so "batch per record" divides a mixed cost. Timed
+  // batch samples run at +25..+85 probe records over the shape base (the
+  // timing probes themselves: 5 single-probe records plus up to 4x20 batch
+  // records ahead of each sample; negligible at scale, up to ~+4-10% on
+  // flat-100 absolute).
   let probe = 0;
   const capture = time(() => ledger.capture({ version: 1, request_id: `req_probe_${shape.name}_${probe}`, actor,
     entries: [{ id: `clm_probe_${shape.name}_${probe++}`, type: 'claim', data: { text: 'probe', kind: 'assertion', attributed_to: 'syn' } }] }));
@@ -223,7 +278,7 @@ for (const shape of SCALES) {
     direct_common_cold: directCommonCold, direct_rare_cold: directRareCold, direct_short_2char_cold: directShortCold,
     expanded_cold: expandedCold, show_cold: showCold, capture_batch_20: captureBatch,
     export: exportTimed, export_bytes: exportBytes,
-    import: importTimed,
+    import: importTimed, cost,
     heap: { baseline_bytes: heapBaseline,
       peak_delta_bytes: heapPeak - heapBaseline,
       residual_bytes: heapAfterCleanup - heapBaseline,

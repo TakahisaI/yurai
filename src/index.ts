@@ -7,4 +7,6 @@ export { canonicalJson, classifySameId, exactContentEquals, exactEntryEquals, is
 export type { MergeOutcome, OriginIdentity, OriginLabel, OutcomeCaseId, OutcomeRow, SameIdClass } from './core/mergeIdentity.js';
 export type { Actor, Bodies, Bundle, Entry, Input, Kind, Receipt, Snapshot, State } from './core/model.js';
 export type { Store } from './core/ports.js';
+export { CountingStore, ScanCollector } from './core/observe.js';
+export type { LedgerObserver, MethodStats, ScanKind, StoreCallStats, StoreMethod } from './core/observe.js';
 export { SqliteStore } from './storage/sqlite.js';
