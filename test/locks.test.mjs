@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { performance } from 'node:perf_hooks';
-import { CountingStore, Ledger, ScanCollector, SqliteStore } from '../dist/index.js';
+import { Ledger, SqliteStore } from '../dist/index.js';
+import { CountingStore, ScanCollector } from '../dist/core/observe.js';
 
 // OS-level lock-duration proxies + operation coverage (#44 slice 5).
 // Pins exact Store-method counts for the newly covered operations, proves the

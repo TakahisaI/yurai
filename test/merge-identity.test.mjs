@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Ledger, canonicalJson, classifySameId, exactContentEquals,
+import { Ledger } from '../dist/index.js';
+import { canonicalJson, classifySameId, exactContentEquals,
   exactEntryEquals, isLedgerId, outcomeFor, sameForkMappingKey, sameOriginIdentity,
-  FORK_REWRITTEN_REFERENCE_FIELDS, MERGE_IDENTITY_OUTCOMES } from '../dist/index.js';
+  FORK_REWRITTEN_REFERENCE_FIELDS, MERGE_IDENTITY_OUTCOMES } from '../dist/core/mergeIdentity.js';
 import { parseSnapshot, references } from '../dist/core/model.js';
 import * as mergeIdentity from '../dist/core/mergeIdentity.js';
 

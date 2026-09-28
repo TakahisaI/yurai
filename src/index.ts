@@ -8,11 +8,12 @@ export type { AffectedReceipt, DegradedDependent, DependentReason, PlanLimits, P
 export { toExpandedRefsV1 } from './core/refs.js';
 export type { ExpandedRefsResponse, RefsInlineResponse, RefsView, RefsWindow } from './core/refs.js';
 export { LedgerError, bundleSchema, inputSchema, snapshotSchema } from './core/model.js';
-export { canonicalJson, classifySameId, exactContentEquals, exactEntryEquals, isLedgerId, outcomeFor,
-  sameForkMappingKey, sameOriginIdentity, FORK_REWRITTEN_REFERENCE_FIELDS, MERGE_IDENTITY_OUTCOMES } from './core/mergeIdentity.js';
-export type { MergeOutcome, OriginIdentity, OriginLabel, OutcomeCaseId, OutcomeRow, SameIdClass } from './core/mergeIdentity.js';
 export type { Actor, Bodies, Bundle, Entry, Input, Kind, Receipt, Snapshot, State } from './core/model.js';
 export type { Store } from './core/ports.js';
-export { CountingStore, ScanCollector } from './core/observe.js';
-export type { LedgerObserver, MethodStats, ScanKind, StoreCallStats, StoreMethod } from './core/observe.js';
 export { SqliteStore } from './storage/sqlite.js';
+
+// Narrow on purpose (ADR 0015): the package root ships the Ledger, the
+// model, the Store port, the SQLite adapter, and the landed planner and
+// refs APIs. Spec-only merge-identity classification
+// (./core/mergeIdentity.js) and the measurement harness
+// (./core/observe.js) stay importable by path but are not re-exported here.

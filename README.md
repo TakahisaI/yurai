@@ -7,9 +7,21 @@ It is a local knowledge ledger recording **who stated what under which condition
 
 PDFs and web pages are supporting documents, not the ledger body. The ledger keeps the path from a claim back to its source, plus the interpretations and reservations gained in conversation.
 
-> Status: **development v0 foundation**. A vertical slice of CLI and SQLite exists.
-> MCP, automatic extraction, quote matching, source retrieval and preservation, semantic search, and UI are not implemented.
+> Status: **development v0 foundation**. A vertical slice of CLI and SQLite exists,
+> including a `verify` command that checks a stored verbatim quote (with its
+> prefix/suffix affixes) against an explicitly given local file and records
+> the result as an append-only Verification event (`match`, `mismatch`,
+> `multiple`, or `unreachable`).
+> MCP, automatic extraction, source retrieval and preservation, semantic search, and UI are not implemented.
 > No real research findings are included. All demos use fictitious data.
+
+`verify` matches quote text against file bytes you hand it; it never fetches
+a source over the network, never stores the file's content (it pins the
+checked bytes by hash), and never judges whether a claim is true.
+A `match` means exactly one occurrence was found under the requested method,
+nothing more: `verbatim` finds the literal quote (with affixes) in the file
+bytes, while `normalized` matches after NFKC/case/whitespace folding, so it
+can report `match` even when the literal quote string is absent.
 
 ## Model
 
@@ -114,7 +126,8 @@ Prefer the export above to copying a live SQLite file. The JSON includes quotati
 - [Reworked premise and design](docs/design.md): what to build and what changed from the original draft.
 - [Architecture and invariants](docs/architecture.md): responsibilities, storage format, cautions for changes.
 - [CLI and data contract](docs/contract.md): operations, relation direction, states, limits.
-- [Staged development plan](docs/roadmap.md): order and completion criteria for the next issues.
+- [Progress status](docs/status.md): what is current, next, deferred, or rejected.
+- [Archived early plan](docs/archive/roadmap-2026-09-28.md): the original staged plan, kept for history only.
 - [Design decisions](docs/adr/0001-foundation.md): adopted structure and trade-offs.
 - [Validation record](docs/validation.md): what validation actually ran and what is unverified.
 
