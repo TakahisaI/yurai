@@ -14,7 +14,7 @@ const help = `yurai — a local ledger of claims and their grounds
   yurai add --file record.json [--actor ID] [--actor-kind human|agent|import]
   yurai review ID --state accepted|rejected|withdrawn|proposed --reason TEXT
   yurai search QUERY [--kind claim|source] [--include-inactive] [--expand evidence]
-                 [--path-limit L] [--path-offset O] [--as-of REV]
+                 [--limit 20] [--offset 0] [--path-limit L] [--path-offset O] [--as-of REV]
   yurai show ID [--limit 20] [--offset 0] [--as-of REV]
   yurai show --request-id ID [--limit 20] [--offset 0] [--as-of REV]
   yurai verify EVIDENCE_ID --file PATH [--edition LABEL] [--method verbatim|normalized]
