@@ -107,6 +107,39 @@ Discovery scans Evidence records per query (no new index or migration) and
 suits small ledgers only. Finding a passage verifies neither the quotation
 nor the claim: `anchor_not_verified` still applies and truth stays unevaluated.
 
+### Expanded search projection (`--projection refs-v1`)
+
+`search QUERY --expand evidence --projection refs-v1` returns the same
+expanded result with path views factored out: each `via` entry carries
+`evidence_ref`, `assessment_ref`, `source_ref`, and `match_fields`, while
+the full un-reduced views appear once under top-level `included`, keyed by
+existing record ID. Claims stay inline in `items`. The response tag is
+`format: yurai.expanded.refs`, `version: 1` (a response-format version, not
+a DB/snapshot version), plus the resolved `window` (`offset`, `limit`,
+`path_offset`, `path_limit`).
+
+Deduplication is by record ID only: same-text records under different IDs,
+distinct Assessments, and opposing stances keep separate entries. Review
+text and verification summaries ride the included views untouched.
+
+Completeness: the `included` keys always equal the union of all `*_ref` in
+the returned `via` — every reference resolves within the response, with no
+missing and no extra views. `included_complete` is always `true`; it covers
+only reference resolution, not the whole ledger or all grounds, and must not
+be confused with `paths_truncated` (lexical path paging) or `next_offset`
+(claim paging). Each page carries the views its own `via` needs; there is no
+cross-response cache and no follow-up fetch.
+
+Revision: the top-level `revision` binds `items` and `included` together.
+Paged refs reads take `--as-of` exactly like inline expanded search and fail
+with CONFLICT after an intervening write. The projection is a pure
+transformation of the inline response: no extra reads, no `show` re-fetch.
+
+Unknown projection values, `--projection` without `--expand evidence`, and
+`--projection` with direct search, source search, or `show` fail explicitly
+(VALIDATION/USAGE); a request is never silently answered in another shape.
+Without the flag every response is byte-identical to before.
+
 ## Verifying a quotation
 
 `verify EVIDENCE_ID --file PATH [--edition LABEL] [--method verbatim|normalized]`
