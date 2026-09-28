@@ -14,4 +14,5 @@ export interface Store {
   receipts(): Receipt[];
   insertReceipt(receipt: Receipt): void;
   count(): number;
+  revision(): number;
 }

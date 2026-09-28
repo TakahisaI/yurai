@@ -175,7 +175,7 @@ export class Ledger {
         outcome: stored.data.outcome, verification: this.view(stored) };
     return null;
   }
-  search(query: string, options: { kind?: 'claim' | 'source'; limit?: number; offset?: number; includeInactive?: boolean; expand?: 'evidence'; pathLimit?: number; pathOffset?: number } = {}) {
+  search(query: string, options: { kind?: 'claim' | 'source'; limit?: number; offset?: number; includeInactive?: boolean; expand?: 'evidence'; pathLimit?: number; pathOffset?: number; asOf?: number } = {}) {
     const { kind = 'claim', limit = 20, offset = 0, includeInactive = false, expand } = options;
     const pathLimit = options.pathLimit === undefined ? limit : options.pathLimit;
     const pathOffset = options.pathOffset === undefined ? 0 : options.pathOffset;
@@ -188,14 +188,17 @@ export class Ledger {
     if (typeof query !== 'string' || query.length > 500 || query.includes('\u0000')) fail('VALIDATION', 'invalid query');
     const tokens = normalize(query).trim().split(/\s+/u).filter(Boolean);
     if (!tokens.length || tokens.length > 16) fail('VALIDATION', 'query needs 1..16 literal terms');
+    if (options.asOf !== undefined && (!Number.isInteger(options.asOf) || options.asOf < 0)) fail('VALIDATION', 'asOf must be a non-negative integer');
     return this.store.transaction(() => {
-      if (expand) return this.expanded(tokens, includeInactive, limit, offset, query, pathLimit, pathOffset);
+      const revision = this.store.revision();
+      if (options.asOf !== undefined && options.asOf !== revision) fail('CONFLICT', `ledger changed since revision ${options.asOf}; restart paging`);
+      if (expand) return this.expanded(tokens, includeInactive, limit, offset, query, pathLimit, pathOffset, revision);
       const rows = this.store.search(kind, tokens, includeInactive, limit + 1, offset);
       return { items: rows.slice(0, limit).map(e => this.view(e)), next_offset: rows.length > limit ? offset + limit : null,
-        query, match: 'literal_terms_and', truth_evaluated: false };
+        query, match: 'literal_terms_and', revision, truth_evaluated: false };
     });
   }
-  private expanded(tokens: string[], includeInactive: boolean, limit: number, offset: number, query: string, pathLimit: number, pathOffset: number) {
+  private expanded(tokens: string[], includeInactive: boolean, limit: number, offset: number, query: string, pathLimit: number, pathOffset: number, revision: number) {
     // Exhaust small result sets, then page the union once: paging the evidence
     // scan or the direct matches first would silently drop routed claims.
     const direct: Entry[] = [];
@@ -249,7 +252,7 @@ export class Ledger {
       .sort((a, b) => byRecency(a.entry, b.entry));
     const page = items.slice(offset, offset + limit + 1);
     return { items: page.slice(0, limit), next_offset: page.length > limit ? offset + limit : null,
-      query, match: 'expanded_evidence_routed', truth_evaluated: false };
+      query, match: 'expanded_evidence_routed', revision, truth_evaluated: false };
   }
   private resolve(entry: Entry) {
     const refs = references(entry).map(r => this.required(r.id));
@@ -257,26 +260,32 @@ export class Ledger {
     return { ...this.view(entry), references: refs.map(r => this.view(r)),
       sources: [...sourceIds].map(s => this.view(this.required(s))) };
   }
-  inspectCapture(requestId: string, limit = 20, offset = 0) {
+  inspectCapture(requestId: string, limit = 20, offset = 0, asOf?: number) {
     pageBounds(limit, offset);
     if (typeof requestId !== 'string' || !/^[A-Za-z][A-Za-z0-9_.:-]{1,127}$/.test(requestId))
       fail('VALIDATION', 'invalid request_id');
+    if (asOf !== undefined && (!Number.isInteger(asOf) || asOf < 0)) fail('VALIDATION', 'asOf must be a non-negative integer');
     return this.store.transaction(() => {
       const receipt = this.store.receipt(requestId) ?? fail('NOT_FOUND', `No capture: ${requestId}`);
       const ids = receipt.ids.slice(offset, offset + limit);
+      const revision = this.store.revision();
+      if (asOf !== undefined && asOf !== revision) fail('CONFLICT', `ledger changed since revision ${asOf}; restart paging`);
       return { request_id: receipt.request_id, digest: receipt.digest, total: receipt.ids.length,
         items: ids.map(id => this.resolve(this.required(id))),
         next_offset: offset + limit < receipt.ids.length ? offset + limit : null,
-        states_as_of: 'inspection', truth_evaluated: false };
+        states_as_of: 'inspection', revision, truth_evaluated: false };
     });
   }
-  show(id: string, limit = 20, offset = 0) {
+  show(id: string, limit = 20, offset = 0, asOf?: number) {
     pageBounds(limit, offset);
+    if (asOf !== undefined && (!Number.isInteger(asOf) || asOf < 0)) fail('VALIDATION', 'asOf must be a non-negative integer');
     return this.store.transaction(() => {
       const entry = this.required(id);
       const rows = this.store.incoming(id, limit + 1, offset);
+      const revision = this.store.revision();
+      if (asOf !== undefined && asOf !== revision) fail('CONFLICT', `ledger changed since revision ${asOf}; restart paging`);
       return { ...this.resolve(entry), connections: rows.slice(0, limit).map(e => this.resolve(e)),
-        next_offset: rows.length > limit ? offset + limit : null, truth_evaluated: false };
+        next_offset: rows.length > limit ? offset + limit : null, revision, truth_evaluated: false };
     });
   }
   exportSnapshot(): Snapshot {

@@ -753,3 +753,55 @@ test('expanded discovery pages match paths independently with deterministic cont
   assert.throws(() => ledger.search('QPQ', { expand: 'evidence', pathLimit: null }), code('VALIDATION'));
   assert.throws(() => ledger.search('QPQ', { expand: 'evidence', pathOffset: null }), code('VALIDATION'));
 });
+test('paged search binds to a revision and restarts explicitly on change', t => {
+  const { ledger } = setup(t);
+  ledger.capture(bundle([claim('clm_r1'), claim('clm_r2')], 'req_r_rev'));
+  const first = ledger.search('出生率', { limit: 1 });
+  assert.equal(typeof first.revision, 'number');
+  const second = ledger.search('出生率', { limit: 1, offset: 1, asOf: first.revision });
+  assert.equal(second.items.length, 1);
+  ledger.capture(bundle([claim('clm_r3')], 'req_r_rev2'));
+  assert.throws(() => ledger.search('出生率', { limit: 1, offset: 1, asOf: first.revision }), code('CONFLICT'));
+  assert.notEqual(ledger.search('出生率', { limit: 1 }).revision, first.revision);
+  assert.throws(() => ledger.search('出生率', { asOf: -1 }), code('VALIDATION'));
+  assert.throws(() => ledger.search('出生率', { asOf: 1.5 }), code('VALIDATION'));
+});
+test('show and capture inspection bind pages to a revision', t => {
+  const { ledger } = setup(t);
+  ledger.capture(bundle([
+    { id: 'src_rv', type: 'source', data: { title: 't', medium: 'note', uri: 'urn:yurai:synthetic:rv' } },
+    claim('clm_rv'),
+    { id: 'evd_rv1', type: 'evidence', data: { source_id: 'src_rv', quote: 'one' } },
+    { id: 'evd_rv2', type: 'evidence', data: { source_id: 'src_rv', quote: 'two' } },
+    { id: 'asm_rv1', type: 'assessment', data: { claim_id: 'clm_rv', evidence_id: 'evd_rv1', stance: 'supports', rationale: 'r' } },
+    { id: 'asm_rv2', type: 'assessment', data: { claim_id: 'clm_rv', evidence_id: 'evd_rv2', stance: 'supports', rationale: 'r' } },
+  ], 'req_r_show'));
+  const view = ledger.show('clm_rv', 1, 0);
+  assert.equal(ledger.show('clm_rv', 1, 1, view.revision).connections.length, 1);
+  ledger.capture(bundle([claim('clm_rv3')], 'req_r_show2'));
+  assert.throws(() => ledger.show('clm_rv', 1, 1, view.revision), code('CONFLICT'));
+  const page = ledger.inspectCapture('req_r_show', 2, 0);
+  assert.equal(ledger.inspectCapture('req_r_show', 2, 2, page.revision).items.length, 2);
+  ledger.capture(bundle([claim('clm_rv4')], 'req_r_show3'));
+  assert.throws(() => ledger.inspectCapture('req_r_show', 2, 2, page.revision), code('CONFLICT'));
+  assert.throws(() => ledger.show('clm_rv', 20, 0, -1), code('VALIDATION'));
+});
+test('path order stays numeric across mixed timestamp precisions', t => {
+  const store = new SqliteStore(':memory:', true);
+  t.after(() => store.close());
+  const early = new Ledger(store, () => '2026-01-01T00:00:00Z');
+  const late = new Ledger(store, () => '2026-01-01T00:00:00.500Z');
+  early.capture(bundle([
+    { id: 'src_mx', type: 'source', data: { title: 't', medium: 'note', uri: 'urn:yurai:synthetic:mx' } },
+    claim('clm_mx'),
+    { id: 'evd_mx1', type: 'evidence', data: { source_id: 'src_mx', quote: 'MIXTERM one' } },
+    { id: 'evd_mx2', type: 'evidence', data: { source_id: 'src_mx', quote: 'MIXTERM two' } },
+    { id: 'asm_mx1', type: 'assessment', data: { claim_id: 'clm_mx', evidence_id: 'evd_mx1', stance: 'supports', rationale: 'r' } },
+  ], 'req_mx_1'));
+  late.capture(bundle([
+    { id: 'asm_mx2', type: 'assessment', data: { claim_id: 'clm_mx', evidence_id: 'evd_mx2', stance: 'supports', rationale: 'r' } },
+  ], 'req_mx_2'));
+  const found = late.search('MIXTERM', { expand: 'evidence' });
+  const item = found.items.find(v => v.entry.id === 'clm_mx');
+  assert.deepEqual(item.via.map(p => p.assessment.entry.id), ['asm_mx2', 'asm_mx1']);
+});

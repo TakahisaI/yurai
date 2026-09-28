@@ -14,8 +14,8 @@ const help = `yurai — a local ledger of claims and their grounds
   yurai add --file record.json [--actor ID] [--actor-kind human|agent|import]
   yurai review ID --state accepted|rejected|withdrawn|proposed --reason TEXT
   yurai search QUERY [--kind claim|source] [--include-inactive] [--expand evidence]
-                 [--path-limit L] [--path-offset O]
-  yurai show ID [--limit 20] [--offset 0]
+                 [--path-limit L] [--path-offset O] [--as-of REV]
+  yurai show ID [--limit 20] [--offset 0] [--as-of REV]
   yurai show --request-id ID [--limit 20] [--offset 0]
   yurai verify EVIDENCE_ID --file PATH [--edition LABEL] [--method verbatim|normalized]
   yurai export                         # snapshot JSON to stdout
@@ -64,7 +64,7 @@ try {
       'actor-kind': { type: 'string' }, 'request-id': { type: 'string' }, kind: { type: 'string' },
       state: { type: 'string' }, reason: { type: 'string' }, edition: { type: 'string' }, method: { type: 'string' },
       limit: { type: 'string' }, offset: { type: 'string' },
-      'path-limit': { type: 'string' }, 'path-offset': { type: 'string' },
+      'path-limit': { type: 'string' }, 'path-offset': { type: 'string' }, 'as-of': { type: 'string' },
       'dry-run': { type: 'boolean' }, 'include-inactive': { type: 'boolean' }, expand: { type: 'string' }, readonly: { type: 'boolean' }, help: { type: 'boolean', short: 'h' } } });
   const [command, arg] = args;
   if (v.help || !command) { process.stdout.write(help); }
@@ -75,7 +75,7 @@ try {
     const allowed: Record<string, string[]> = {
       init: [], capture: ['file','dry-run'], add: ['file','actor','actor-kind','request-id','dry-run'],
       review: ['state','reason','actor','actor-kind','request-id','dry-run'],
-      search: ['kind','limit','offset','include-inactive','expand','path-limit','path-offset'], show: ['limit','offset','request-id'],
+      search: ['kind','limit','offset','include-inactive','expand','path-limit','path-offset','as-of'], show: ['limit','offset','request-id','as-of'],
       verify: ['file','edition','method','actor','actor-kind','request-id','dry-run'],
       export: [], import: ['file'], doctor: [], schema: [] };
     for (const key of Object.keys(v)) if (!['db','help','readonly'].includes(key) && !allowed[command]!.includes(key)) usage(`--${key} is not valid for ${command}`);
@@ -110,11 +110,12 @@ try {
           result = ledger.search(arg!, { kind: v.kind === 'source' ? 'source' : 'claim', limit: Number(v.limit ?? 20), offset: Number(v.offset ?? 0),
             includeInactive: v['include-inactive'] ?? false, ...(v.expand === undefined ? {} : { expand: 'evidence' as const }),
             ...(v['path-limit'] === undefined ? {} : { pathLimit: Number(v['path-limit']) }),
-            ...(v['path-offset'] === undefined ? {} : { pathOffset: Number(v['path-offset']) }) }); break;
+            ...(v['path-offset'] === undefined ? {} : { pathOffset: Number(v['path-offset']) }),
+            ...(v['as-of'] === undefined ? {} : { asOf: Number(v['as-of']) }) }); break;
         case 'show':
           result = v['request-id'] !== undefined
-            ? ledger.inspectCapture(v['request-id'], Number(v.limit ?? 20), Number(v.offset ?? 0))
-            : ledger.show(arg!, Number(v.limit ?? 20), Number(v.offset ?? 0)); break;
+            ? ledger.inspectCapture(v['request-id'], Number(v.limit ?? 20), Number(v.offset ?? 0), v['as-of'] === undefined ? undefined : Number(v['as-of']))
+            : ledger.show(arg!, Number(v.limit ?? 20), Number(v.offset ?? 0), v['as-of'] === undefined ? undefined : Number(v['as-of'])); break;
         case 'verify': {
           if (!v.file) usage('verify requires --file');
           if (v.method !== undefined && v.method !== 'verbatim' && v.method !== 'normalized') usage('--method must be verbatim or normalized');
