@@ -56,14 +56,23 @@ migration, journal-mode change, or content/receipt/index write. Writes fail with
 before mutation; a schema needing migration fails and names a writable reopen. `init
 --readonly` is rejected. doctor under `--readonly` reports `fts_integrity:
 skipped-readonly` because the FTS self-check is a write; writable doctor reports `checked`.
-Opening a WAL-mode ledger may still create `-shm`/`-wal` sidecars; the guarantee covers
-main-file bytes and WAL content, not the transient shared-memory index.
+Dry-run capture and dry-run verification persist nothing and behave
+identically under `--readonly`.
+Opening a WAL-mode ledger may still create `-shm`/`-wal` sidecars; the guarantee is
+that the readonly handle performs no logical database or WAL-frame writes — with no
+concurrent writer, main-file bytes and WAL content are unchanged — while sidecar file
+creation and the transient shared-memory index stay out of scope. The open still needs
+any existing `-shm`/`-wal` sidecars readable — unreadable existing sidecars fail
+even with a writable parent directory — and, when sidecars are absent, a writable
+parent directory to create them; otherwise it fails with SQLite's own error.
 On a read-only file a writable open may still succeed — SQLite can fall
 back to a read-only connection when read-write access is unavailable — and
 fail only on the first write; other setups may refuse the open itself. Reads
 of such files must still use `--readonly`.
 Read-only opens see committed WAL frames, including frames committed after an
 earlier read; they never use an immutable-file shortcut that ignores WAL state.
+The full read-only parity contract and the OS/filesystem limits matrix,
+with per-claim verification status, live in docs/readonly-limits.md.
 search/show limit defaults to 20, max 100. offset is 0–1,000,000. next_offset=null ends that search/connection page.
 Responses carry `revision`, the current ledger change marker. Repeating a paged
 read with `--as-of REV` fails with CONFLICT when the ledger changed since that
