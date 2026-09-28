@@ -16,7 +16,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build && node --test test/cli.test.mjs test/ledger.test.mjs test/concurrency.test.mjs test/crash.test.mjs test/retrieval-eval.test.mjs test/readonly.test.mjs test/refs-projection.test.mjs test/merge-identity.test.mjs test/instrumentation.test.mjs test/tombstone-contract.test.mjs test/judgment-trail.test.mjs",
+    "test": "npm run build && node --test test/cli.test.mjs test/ledger.test.mjs test/concurrency.test.mjs test/crash.test.mjs test/retrieval-eval.test.mjs test/readonly.test.mjs test/refs-projection.test.mjs test/merge-identity.test.mjs test/instrumentation.test.mjs test/tombstone-contract.test.mjs test/authoring-friction.test.mjs test/merge-semantics.test.mjs test/merge-retries.test.mjs test/judgment-trail.test.mjs",
     "check": "npm run typecheck && npm test",
     "start": "node dist/cli.js",
     "prepack": "npm run build"
