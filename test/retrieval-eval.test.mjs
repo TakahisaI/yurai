@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { Ledger, SqliteStore } from '../dist/index.js';
 
 const ledger = JSON.parse(readFileSync(new URL('../examples/eval/ledger.json', import.meta.url), 'utf8'));
 const ledgerWdDeps = JSON.parse(readFileSync(new URL('../examples/eval/ledger-wd-deps.json', import.meta.url), 'utf8'));
+const ledgerVerify = JSON.parse(readFileSync(new URL('../examples/eval/ledger-verify.json', import.meta.url), 'utf8'));
 const queries = JSON.parse(readFileSync(new URL('../examples/eval/queries.json', import.meta.url), 'utf8'));
 
 function setup() {
@@ -12,6 +14,7 @@ function setup() {
   const ledgerApi = new Ledger(store);
   ledgerApi.capture(ledger);
   ledgerApi.capture(ledgerWdDeps);
+  ledgerApi.capture(ledgerVerify);
   return { store, ledgerApi };
 }
 
@@ -196,18 +199,31 @@ test('retrieval eval: routed paths preserve review, verification, and provenance
   const result = ledgerApi.search('38℃', { expand: 'evidence' });
   const item = result.items.find(i => i.entry.id === 'clm_eval_xz7');
   assert.ok(item);
-  // Attribution, scope, and motive survive on the routed claim.
+  // Attribution, scope, and motive survive on the routed claim, as does the recorder.
   assert.equal(item.entry.data.attributed_to, 'fictional-experimenter');
+  assert.deepEqual(item.entry.actor, { kind: 'agent', id: 'fixture-agent' });
   assert.ok(item.entry.data.scope.includes('XZ-7'));
   assert.ok(item.entry.data.why.length > 0);
   const path = item.via.find(v => v.evidence.entry.id === 'evd_eval_xz7');
   assert.ok(path);
+  for (const side of [path.evidence, path.assessment, path.source]) {
+    assert.deepEqual(side.entry.actor, { kind: 'agent', id: 'fixture-agent' });
+  }
+  assert.deepEqual(path.assessment.review.actor, { kind: 'agent', id: 'fixture-agent' });
+  assert.deepEqual(path.evidence.verification.actor, { kind: 'agent', id: 'fixture-agent' });
   // The verified anchor carries its verification summary and edition agreement.
   assert.equal(path.evidence.verification.id, 'vrf_eval_xz7');
   assert.equal(path.evidence.verification.outcome, 'match');
   assert.equal(path.evidence.verification.edition.agreement, 'match');
   assert.ok(path.evidence.warnings.includes('anchor_match'));
   assert.ok(!path.evidence.warnings.includes('anchor_not_verified'));
+  // The fixture verification is internally consistent: its pinned passage is
+  // exactly the stored quote, so verifyEvidence() could have produced it.
+  const pinned = ledgerApi.show('vrf_eval_xz7').entry.data;
+  const quote = path.evidence.entry.data.quote;
+  assert.equal(pinned.occurrences, 1);
+  assert.equal(pinned.byte_length, Buffer.byteLength(quote, 'utf8'));
+  assert.equal(pinned.passage_sha256, createHash('sha256').update(quote, 'utf8').digest('hex'));
   // The accepted assessment carries its review, stance, and rationale.
   assert.equal(path.assessment.state, 'accepted');
   assert.equal(path.assessment.review.data.state, 'accepted');
