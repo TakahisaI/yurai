@@ -177,7 +177,8 @@ export class Ledger {
   }
   search(query: string, options: { kind?: 'claim' | 'source'; limit?: number; offset?: number; includeInactive?: boolean; expand?: 'evidence'; pathLimit?: number; pathOffset?: number } = {}) {
     const { kind = 'claim', limit = 20, offset = 0, includeInactive = false, expand } = options;
-    const pathLimit = options.pathLimit ?? limit, pathOffset = options.pathOffset ?? 0;
+    const pathLimit = options.pathLimit === undefined ? limit : options.pathLimit;
+    const pathOffset = options.pathOffset === undefined ? 0 : options.pathOffset;
     pageBounds(limit, offset);
     pageBounds(pathLimit, pathOffset);
     if (kind !== 'claim' && kind !== 'source') fail('VALIDATION', 'search kind must be claim or source');
@@ -231,11 +232,13 @@ export class Ledger {
     }
     // Numeric instant comparison: mixed precisions ('...00Z' vs '...00.500Z') invert under string order.
     const byRecency = (a: Entry, b: Entry) => Date.parse(b.created_at) - Date.parse(a.created_at) || a.id.localeCompare(b.id);
+    const byPath = (a: Path, b: Path) => Date.parse(b.assessment.created_at) - Date.parse(a.assessment.created_at)
+      || a.evidence.id.localeCompare(b.evidence.id) || a.assessment.id.localeCompare(b.assessment.id);
     const items = [...merged.values()]
       .filter(({ claim }) => includeInactive || live(claim))
       .map(({ claim, direct, paths }) => {
         const kept = (includeInactive ? paths : paths.filter(p => live(p.evidence) && live(p.assessment) && live(p.source)))
-          .sort((a, b) => byRecency(a.assessment, b.assessment) || a.evidence.id.localeCompare(b.evidence.id));
+          .sort(byPath);
         return { ...this.view(claim), direct_match: direct,
           via: kept.slice(pathOffset, pathOffset + pathLimit).map(p => ({ evidence: this.view(p.evidence), assessment: this.view(p.assessment),
             source: this.view(p.source), match_fields: p.match_fields })),

@@ -77,7 +77,8 @@ the Evidence's Source — each with current state, review, and warnings.
 independent of the claim page: `--path-limit` (1..100, default: `--limit`)
 and `--path-offset` page it, with `via_next_offset` continuing truncated
 paths to their end. Paths order deterministically by Assessment recency,
-then Evidence ID; paging assumes a quiescent ledger, since an intervening
+then Evidence ID, then Assessment ID; paging assumes a quiescent ledger,
+since an intervening
 write can shift newest-first positions (revision binding is later work).
 `via` holds lexical matching paths only; `show` pages all inspected grounds.
 Claims page by newest first with the usual `next_offset`; ties on recorded

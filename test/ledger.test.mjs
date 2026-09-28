@@ -731,6 +731,8 @@ test('expanded discovery pages match paths independently with deterministic cont
   assert.equal(rest.paths_truncated, false);
   const union = [...item.via, ...rest.via].map(p => `${p.evidence.entry.id}/${p.assessment.entry.id}`).sort();
   assert.deepEqual(union, ['evd_pa/asm_pa', 'evd_pa/asm_pa2', 'evd_pb/asm_pb', 'evd_pc/asm_pc']);
+  assert.deepEqual(item.via.map(p => `${p.evidence.entry.id}/${p.assessment.entry.id}`),
+    ['evd_pa/asm_pa', 'evd_pa/asm_pa2']);
   const again = ledger.search('QPQ', { expand: 'evidence', limit: 20, pathLimit: 2 });
   assert.deepEqual(again.items.find(v => v.entry.id === 'clm_p').via.map(p => p.assessment.entry.id),
     item.via.map(p => p.assessment.entry.id));
@@ -740,4 +742,6 @@ test('expanded discovery pages match paths independently with deterministic cont
   assert.throws(() => ledger.search('QPQ', { pathLimit: 2 }), code('VALIDATION'));
   assert.throws(() => ledger.search('QPQ', { expand: 'evidence', pathLimit: 0 }), code('VALIDATION'));
   assert.throws(() => ledger.search('QPQ', { expand: 'evidence', pathLimit: 101 }), code('VALIDATION'));
+  assert.throws(() => ledger.search('QPQ', { expand: 'evidence', pathLimit: null }), code('VALIDATION'));
+  assert.throws(() => ledger.search('QPQ', { expand: 'evidence', pathOffset: null }), code('VALIDATION'));
 });
