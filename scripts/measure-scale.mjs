@@ -1,14 +1,30 @@
 // Deterministic scale/cost measurement for #44. Builds synthetic ledgers at
 // explicit sizes, times representative operations, and prints one JSON report.
 // Not part of `npm test`: timings are environment-dependent. All content is
-// synthetic; no private data is read. Memory is intentionally unmeasured:
-// honest heap deltas need GC control at both boundaries (a later pass).
+// synthetic; no private data is read. Run with `node --expose-gc`: each heap
+// boundary runs five full collections first, and the report carries
+// per-phase heap deltas plus the post-cleanup residual per scale point.
 import { performance } from 'node:perf_hooks';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Ledger, SqliteStore } from '../dist/index.js';
+
+if (typeof globalThis.gc !== 'function') {
+  console.error('measure-scale: rerun as `node --expose-gc scripts/measure-scale.mjs`; heap deltas need GC control.');
+  process.exit(1);
+}
+const gc = globalThis.gc;
+// Five full collections before each reading: fewer passes leave survivors
+// that pollute the next boundary (observed as negative import deltas), and
+// stopping at the first stable reading quits while incremental work is still
+// in flight. Heap values are single post-GC samples, not medians: the
+// collection itself is the stabilizer.
+function heapBytes() {
+  for (let i = 0; i < 5; i++) gc();
+  return process.memoryUsage().heapUsed;
+}
 
 const actor = { kind: 'agent', id: 'scale-gen' };
 const AT = '2026-09-27T00:00:00.000Z';
@@ -99,18 +115,24 @@ const SCALES = [
   { name: 'dense-100x8', claims: 100, evdPerClaim: 8, asmPerEvd: 3, reviewsPerClaim: 4, verificationsFraction: 0.2, quoteWords: 40 },
 ];
 
-const report = { env: { node: process.version, platform: process.platform }, scales: [] };
+const report = { env: { node: process.version, platform: process.platform, gc_control: true }, scales: [] };
 for (const shape of SCALES) {
+  const heapBaseline = heapBytes();
   const { dir, store, ledger, counts, buildMs } = buildLedger(shape);
+  const heapAfterBuild = heapBytes();
   const directCommon = time(() => ledger.search('COMMONTERM', { limit: 50 }));
   const directRare = time(() => ledger.search(`CLAIMRARE${shape.claims - 1}`, { limit: 50 }));
   const directShort = time(() => ledger.search('気孔', { limit: 50 }));
   const expanded = time(() => ledger.search('RARE7_0', { limit: 50, expand: 'evidence' }));
   const show = time(() => ledger.show('clm_m0007'));
+  const heapAfterQueries = heapBytes();
   const exportTimed = time(() => ledger.exportSnapshot());
   // Byte size uses the exact CLI export serialization the 16 MiB gate measures.
-  const snapshotJson = `${JSON.stringify(ledger.exportSnapshot(), null, 2)}\n`;
-  const parsed = JSON.parse(snapshotJson);
+  let snapshotJson = `${JSON.stringify(ledger.exportSnapshot(), null, 2)}\n`;
+  let parsed = JSON.parse(snapshotJson);
+  // snapshotJson and parsed stay alive through the import loop, so the export
+  // delta includes both retained copies.
+  const heapAfterExport = heapBytes();
   const importSamples = [];
   for (let i = 0; i < 5; i++) {
     const target = mkdtempSync(join(tmpdir(), 'yurai-scale-'));
@@ -124,15 +146,41 @@ for (const shape of SCALES) {
   }
   importSamples.sort((a, b) => a - b);
   const importTimed = { median_ms: importSamples[2], max_ms: importSamples[4] };
+  const heapAfterImport = heapBytes();
+  const exportBytes = Buffer.byteLength(snapshotJson, 'utf8');
+  // Release both export copies so later boundaries measure retained ledger
+  // state, not the snapshot under test. The release gets its own boundary so
+  // the capture delta stays interpretable.
+  snapshotJson = null;
+  parsed = null;
+  const heapAfterRelease = heapBytes();
   // Capture probes run last so export/import match the advertised counts.
   let probe = 0;
   const capture = time(() => ledger.capture({ version: 1, request_id: `req_probe_${shape.name}_${probe}`, actor,
     entries: [{ id: `clm_probe_${shape.name}_${probe++}`, type: 'claim', data: { text: 'probe', kind: 'assertion', attributed_to: 'syn' } }] }));
-  report.scales.push({ shape: shape.name, counts, build_ms: Math.round(buildMs),
-    direct_common: directCommon, direct_rare: directRare, direct_short_2char: directShort, expanded, show, capture_single: capture,
-    export: exportTimed, export_bytes: Buffer.byteLength(snapshotJson, 'utf8'),
-    import: importTimed });
+  const heapAfterCapture = heapBytes();
   store.close();
   rmSync(dir, { recursive: true, force: true });
+  const heapAfterCleanup = heapBytes();
+  // Peak and residual are the robust readings: per-phase attribution carries
+  // GC-timing noise (a boundary right after an allocation burst can read high
+  // until later churn finishes sweeping, so a neighboring delta reads low),
+  // but the peak always lands on the export boundary and cleanup returns to
+  // the same floor on every shape.
+  const heapPeak = Math.max(heapAfterBuild, heapAfterQueries, heapAfterExport,
+    heapAfterImport, heapAfterRelease, heapAfterCapture);
+  report.scales.push({ shape: shape.name, counts, build_ms: Math.round(buildMs),
+    direct_common: directCommon, direct_rare: directRare, direct_short_2char: directShort, expanded, show, capture_single: capture,
+    export: exportTimed, export_bytes: exportBytes,
+    import: importTimed,
+    heap: { baseline_bytes: heapBaseline,
+      peak_delta_bytes: heapPeak - heapBaseline,
+      residual_bytes: heapAfterCleanup - heapBaseline,
+      phases: { build_delta_bytes: heapAfterBuild - heapBaseline,
+        queries_delta_bytes: heapAfterQueries - heapAfterBuild,
+        export_delta_bytes: heapAfterExport - heapAfterQueries,
+        import_delta_bytes: heapAfterImport - heapAfterExport,
+        release_delta_bytes: heapAfterRelease - heapAfterImport,
+        capture_delta_bytes: heapAfterCapture - heapAfterRelease } } });
 }
 console.log(JSON.stringify(report, null, 1));
