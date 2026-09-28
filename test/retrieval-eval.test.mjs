@@ -209,12 +209,15 @@ test('retrieval eval: routed paths preserve review, verification, and provenance
   for (const side of [path.evidence, path.assessment, path.source]) {
     assert.deepEqual(side.entry.actor, { kind: 'agent', id: 'fixture-agent' });
   }
-  assert.deepEqual(path.assessment.review.actor, { kind: 'agent', id: 'fixture-agent' });
-  assert.deepEqual(path.evidence.verification.actor, { kind: 'agent', id: 'fixture-agent' });
+  // The review and verification came from a later capture by a distinct
+  // recorder, so substitution with the claim actor cannot pass silently.
+  assert.deepEqual(path.assessment.review.actor, { kind: 'agent', id: 'fixture-verifier' });
+  assert.deepEqual(path.evidence.verification.actor, { kind: 'agent', id: 'fixture-verifier' });
   // The verified anchor carries its verification summary and edition agreement.
   assert.equal(path.evidence.verification.id, 'vrf_eval_xz7');
   assert.equal(path.evidence.verification.outcome, 'match');
   assert.equal(path.evidence.verification.edition.agreement, 'match');
+  assert.deepEqual(path.evidence.verification, ledgerApi.show('evd_eval_xz7').verification);
   assert.ok(path.evidence.warnings.includes('anchor_match'));
   assert.ok(!path.evidence.warnings.includes('anchor_not_verified'));
   // The fixture verification is internally consistent: its pinned passage is
