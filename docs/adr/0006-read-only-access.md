@@ -19,10 +19,13 @@ access and refuses every mutation path before it can execute:
 
 ## Guarantees and limits
 
-The guarantee covers main-file bytes plus WAL content: both are
-byte-identical before and after any read-only session. Opening a WAL-mode
-ledger may still create `-shm`/`-wal` sidecars; the transient
-shared-memory index is outside the guarantee. `:memory:` and `init`
+The guarantee is that the read-only handle performs no logical database or
+WAL-frame writes: with no concurrent writer, main-file bytes plus WAL content
+are byte-identical before and after any read-only session (a concurrent
+writer's commits stay visible to readers and are outside this comparison).
+Opening a WAL-mode ledger may still create `-shm`/`-wal` sidecars; sidecar
+file creation and the transient shared-memory index are outside the guarantee.
+`:memory:` and `init`
 have no read-only form: there is no existing file to protect.
 
 This mode protects against application writes. It is not a sandbox
