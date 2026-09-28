@@ -242,7 +242,7 @@ export class Ledger {
         return { ...this.view(claim), direct_match: direct,
           via: kept.slice(pathOffset, pathOffset + pathLimit).map(p => ({ evidence: this.view(p.evidence), assessment: this.view(p.assessment),
             source: this.view(p.source), match_fields: p.match_fields })),
-          total_paths: kept.length, paths_truncated: pathOffset + pathLimit < kept.length,
+          total_paths: kept.length, paths_truncated: pathOffset > 0 || pathOffset + pathLimit < kept.length,
           via_next_offset: pathOffset + pathLimit < kept.length ? pathOffset + pathLimit : null };
       })
       .filter(item => includeInactive || item.direct_match || item.total_paths > 0)

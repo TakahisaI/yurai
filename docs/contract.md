@@ -73,7 +73,8 @@ Each item carries `direct_match`, plus `via` entries with the matching
 Evidence (and matched fields), the linking Assessment with its stance, and
 the Evidence's Source — each with current state, review, and warnings.
 `total_paths` counts routed paths (never independent corroboration) and
-`paths_truncated` marks a cut per-claim window. The per-claim window is
+`paths_truncated` marks a cut per-claim window: true whenever earlier or
+later paths fall outside it, so `false` always means `via` is complete. The per-claim window is
 independent of the claim page: `--path-limit` (1..100, default: `--limit`)
 and `--path-offset` page it, with `via_next_offset` continuing truncated
 paths to their end. Paths order deterministically by Assessment recency,

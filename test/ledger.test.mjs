@@ -728,7 +728,7 @@ test('expanded discovery pages match paths independently with deterministic cont
   const rest = second.items.find(v => v.entry.id === 'clm_p');
   assert.equal(rest.via.length, 2);
   assert.equal(rest.via_next_offset, null);
-  assert.equal(rest.paths_truncated, false);
+  assert.equal(rest.paths_truncated, true);
   const union = [...item.via, ...rest.via].map(p => `${p.evidence.entry.id}/${p.assessment.entry.id}`).sort();
   assert.deepEqual(union, ['evd_pa/asm_pa', 'evd_pa/asm_pa2', 'evd_pb/asm_pb', 'evd_pc/asm_pc']);
   assert.deepEqual(item.via.map(p => `${p.evidence.entry.id}/${p.assessment.entry.id}`),

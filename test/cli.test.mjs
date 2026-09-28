@@ -237,6 +237,7 @@ test('CLI pages expanded match paths independently of the claim page', t => {
   const rest = second.items.find(v => v.entry.id === 'clm_eval_all');
   assert.equal(rest.via.length, 1);
   assert.equal(rest.via_next_offset, null);
+  assert.equal(rest.paths_truncated, true);
   assert.notEqual(item.via[0].assessment.entry.id, rest.via[0].assessment.entry.id);
   const bad = run(['search', '38℃', '--path-limit', '1']);
   assert.equal(bad.status, 2);
