@@ -1,4 +1,4 @@
-import { fail } from './model.js';
+import { canonicalJson, fail } from './model.js';
 import type { EvidenceField } from './model.js';
 
 /** Resolved paging window the refs response was built from. */
@@ -63,15 +63,6 @@ export interface ExpandedRefsResponse {
   included_complete: true;
 }
 
-/** Order-insensitive comparison for views sharing one ID. JSON shape keeps
- *  the null-vs-absent distinction; sorting only neutralizes key order. */
-function stableStringify(value: unknown): string {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
-  return `{${Object.keys(value).sort().map(k =>
-    `${JSON.stringify(k)}:${stableStringify((value as Record<string, unknown>)[k])}`).join(',')}}`;
-}
-
 /**
  * Pure projection from an already-built inline expanded response to refs-v1.
  * No store access: the caller passes the response and its resolved window,
@@ -94,7 +85,9 @@ export function toExpandedRefsV1(inline: RefsInlineResponse, window: RefsWindow)
       fail('IO_OR_RUNTIME', `refs-v1 projection: expected ${expectedType} view, found ${entry.type} (${entry.id})`);
     const prior = included.get(entry.id);
     if (prior === undefined) included.set(entry.id, view as RefsView);
-    else if (stableStringify(prior) !== stableStringify(view))
+    // Order-insensitive comparison: JSON shape keeps the null-vs-absent
+    // distinction; sorting only neutralizes key order.
+    else if (canonicalJson(prior) !== canonicalJson(view))
       fail('IO_OR_RUNTIME', `refs-v1 projection: conflicting views for ${entry.id}`);
     return entry.id;
   };

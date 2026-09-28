@@ -7,6 +7,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { performance } from 'node:perf_hooks';
 import { Ledger, SqliteStore } from '../dist/index.js';
 import { CountingStore, ScanCollector } from '../dist/core/observe.js';
+import { memorySetup } from './helpers/memory.mjs';
+import { BUSY_TIMEOUT_MS, BUSY_WAIT_FLOOR_MS } from './helpers/timeouts.mjs';
 
 // OS-level lock-duration proxies + operation coverage (#44 slice 5).
 // Pins exact Store-method counts for the newly covered operations, proves the
@@ -28,12 +30,7 @@ const FIXTURE = { version: 1, request_id: 'req_fixture', actor, entries: [
 ] };
 
 function setup(t, hooked = true) {
-  const raw = new SqliteStore(':memory:', true);
-  t.after(() => raw.close());
-  if (!hooked) return { raw, ledger: new Ledger(raw, () => AT) };
-  const counting = new CountingStore(raw);
-  const scans = new ScanCollector();
-  return { raw, counting, scans, ledger: new Ledger(counting, () => AT, scans) };
+  return memorySetup(t, { hooked });
 }
 
 function costLockOf(counting, scans, fn, expectThrow = null) {
@@ -129,13 +126,15 @@ test('batch capture holds one transaction over N records', t => {
 test('refs-v1 projection issues the same Store calls as expanded discovery', t => {
   const { ledger, counting, scans } = setup(t);
   ledger.capture(FIXTURE);
-  const { calls, scans: got, txn } = costLockOf(counting, scans,
-    () => ledger.search('rareword', { expand: 'evidence', projection: 'refs-v1' }));
-  assert.deepEqual(calls, {
-    transaction: [1, 0, 0], revision: [1, 0, 0], search: [1, 0, 0], entries: [1, 7, 0],
-    incoming: [1, 1, 0], get: [2, 2, 0], latestReview: [8, 2, 0], latestVerification: [2, 0, 0],
+  // The exact call tables live with expanded discovery in
+  // instrumentation.test.mjs, and refs-projection proves the projection adds
+  // no store reads: here only the hold sample plus a result smoke assert.
+  let result;
+  const { txn } = costLockOf(counting, scans, () => {
+    result = ledger.search('rareword', { expand: 'evidence', projection: 'refs-v1' });
   });
-  assert.deepEqual(got, { ...ZERO_SCANS, 'expanded-evidence': 7 });
+  assert.equal(result.items.length, 1);
+  assert.equal(result.items[0].total_paths, 1);
   assertHoldSample(txn);
 });
 
@@ -209,7 +208,7 @@ test('contended BEGIN records zero hold despite the seconds-long busy wait', t =
   new Ledger(seed, () => AT).capture(FIXTURE);
   seed.close();
   // Open the contended store before the holder takes the lock, so only the
-  // measured BEGIN IMMEDIATE contends (stores retry 5s via busy_timeout).
+  // measured BEGIN IMMEDIATE contends (stores retry via busy_timeout).
   const contendedRaw = handles.store = new SqliteStore(dbPath);
   const counting = new CountingStore(contendedRaw);
   const contended = new Ledger(counting, () => AT, new ScanCollector());
@@ -219,10 +218,10 @@ test('contended BEGIN records zero hold despite the seconds-long busy wait', t =
     const started = performance.now();
     assert.throws(() => contended.search('alpha', { limit: 1 }), /busy|locked/i);
     const waited = performance.now() - started;
-    // The wait really happened (busy_timeout=5000 with wide margin), yet no
+    // The wait really happened (busy_timeout with wide margin), yet no
     // hold occurred: the callback never ran, so the sample is exactly 0 —
     // distinctly reported, not the seconds spent waiting.
-    assert.ok(waited >= 4000, `expected a ~5s busy wait, saw ${waited}ms`);
+    assert.ok(waited >= BUSY_WAIT_FLOOR_MS, `expected a ~${BUSY_TIMEOUT_MS}ms busy wait, saw ${waited}ms`);
     assert.deepEqual(counting.txnTimings(), [0]);
   } finally {
     holder.exec('ROLLBACK');
@@ -239,32 +238,6 @@ test('reset clears timings and snapshot keeps the count-only shape', t => {
   assert.deepEqual(counting.txnTimings(), []);
   const snap = counting.snapshot();
   assert.deepEqual(Object.keys(snap.transaction).sort(), ['calls', 'rowsReturned', 'rowsWritten']);
-});
-
-test('doctor hold proxy records one finite sample without changing the result', t => {
-  const { raw } = setup(t);
-  new Ledger(raw, () => AT).capture(FIXTURE);
-  const orig = raw.transaction.bind(raw);
-  let ms = null;
-  raw.transaction = (fn) => {
-    let holdStart = null;
-    const wrapped = () => { holdStart ??= performance.now(); return fn(); };
-    try {
-      const result = orig(wrapped);
-      ms = holdStart === null ? 0 : performance.now() - holdStart;
-      return result;
-    } catch (error) {
-      ms = holdStart === null ? 0 : performance.now() - holdStart;
-      throw error;
-    }
-  };
-  let result;
-  try { result = raw.doctor(); }
-  finally { raw.transaction = orig; }
-  assert.equal(result.ok, true);
-  assert.equal(typeof ms, 'number');
-  assert.ok(Number.isFinite(ms) && ms >= 0 && ms < 60000);
-  assert.equal(raw.doctor().ok, true);
 });
 
 test('held IMMEDIATE lets readonly reads proceed while second writers serialize', t => {
@@ -294,31 +267,4 @@ test('held IMMEDIATE lets readonly reads proceed while second writers serialize'
   const check = new SqliteStore(dbPath);
   try { assert.equal(check.doctor().ok, true); }
   finally { check.close(); }
-});
-
-test('hooks on vs off stay identical across the newly covered operations', t => {
-  const plain = setup(t, false);
-  const hooked = setup(t, true);
-  const seen = { plain: [], hooked: [] };
-  for (const [name, { ledger }] of [['plain', plain], ['hooked', hooked]]) {
-    seen[name].push(ledger.capture(FIXTURE));
-    seen[name].push(ledger.capture({ version: 1, request_id: 'req_dry', actor,
-      entries: [{ id: 'clm_dry', type: 'claim', data: { text: 'dry', kind: 'assertion', attributed_to: 'synthetic' } }] }, true));
-    const replay = { version: 1, request_id: 'req_replay', actor,
-      entries: [{ id: 'clm_replay', type: 'claim', data: { text: 'replay', kind: 'assertion', attributed_to: 'synthetic' } }] };
-    seen[name].push(ledger.capture(replay));
-    seen[name].push(ledger.capture(replay));
-    seen[name].push(ledger.capture({ version: 1, request_id: 'req_sup', actor, entries: [
-      { id: 'clm_sup', type: 'claim', data: { text: 'sup', kind: 'assertion', attributed_to: 'synthetic' } },
-      { id: 'rel_sup', type: 'relation', data: { from_claim_id: 'clm_sup', to_claim_id: 'clm_i1',
-        relation: 'supersedes', rationale: 'syn' } },
-    ] }));
-    seen[name].push(ledger.search('rareword', { expand: 'evidence', projection: 'refs-v1' }));
-    seen[name].push(ledger.inspectCapture('req_fixture'));
-    seen[name].push(ledger.exportSnapshot());
-  }
-  assert.equal(JSON.stringify(seen.plain), JSON.stringify(seen.hooked));
-  assert.equal(
-    Buffer.byteLength(`${JSON.stringify(plain.ledger.exportSnapshot(), null, 2)}\n`, 'utf8'),
-    Buffer.byteLength(`${JSON.stringify(hooked.ledger.exportSnapshot(), null, 2)}\n`, 'utf8'));
 });

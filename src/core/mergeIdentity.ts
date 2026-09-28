@@ -1,3 +1,4 @@
+import { canonicalJson, ID_MAX_LENGTH, ID_PATTERN } from './model.js';
 import type { Entry, Kind } from './model.js';
 
 /**
@@ -56,21 +57,9 @@ export function sameForkMappingKey(a: OriginIdentity, b: OriginIdentity): boolea
   return key(a) === key(b) && a.id === b.id;
 }
 
-/**
- * Canonical JSON: object keys sorted recursively so that key ORDER never
- * affects comparison. Strings (including quotes, Unicode, DOI text, and
- * identifiers) pass through `JSON.stringify` byte-identically: no trimming,
- * no case folding, no Unicode normalization, no quote rewriting. This matches
- * the ledger receipt digest's treatment of stored strings (see `canonical`
- * in ledger.ts) and deliberately differs from search normalization
- * (`normalize` in model.ts), which must never feed an equality test.
- */
-export function canonicalJson(value: unknown): string {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
-  return `{${Object.keys(value).sort().map(k =>
-    `${JSON.stringify(k)}:${canonicalJson((value as Record<string, unknown>)[k])}`).join(',')}}`;
-}
+/** Canonical JSON, defined once in model.ts and re-exported here so this
+ *  module's pinned export surface does not churn. */
+export { canonicalJson };
 
 /**
  * Exact-entry equality: same ID, same type, same body (including
@@ -221,8 +210,6 @@ export const FORK_REWRITTEN_REFERENCE_FIELDS: Readonly<Record<Kind, readonly str
  *  colliding with a live local ID) refuses the merge instead of truncating
  *  or coercing. The minting scheme itself is deferred to the merge planner
  *  (#34); this predicate only states the constraint every scheme must meet. */
-const LEDGER_ID_PATTERN = /^[A-Za-z][A-Za-z0-9_.:-]{1,127}$/;
-
 export function isLedgerId(text: string): boolean {
-  return LEDGER_ID_PATTERN.test(text);
+  return ID_PATTERN.test(text) && String(text).length <= ID_MAX_LENGTH;
 }

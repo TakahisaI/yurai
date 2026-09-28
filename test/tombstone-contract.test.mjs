@@ -4,15 +4,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { LedgerError, parseSnapshot, references } from '../dist/core/model.js';
+import { parseSnapshot, references } from '../dist/core/model.js';
+import { code } from './helpers/assert.mjs';
 
 const dir = new URL('./fixtures/tombstone/', import.meta.url);
 const load = name => JSON.parse(readFileSync(new URL(name, dir), 'utf8'));
 const sha256hex = s => createHash('sha256').update(s, 'utf8').digest('hex');
 const HEX64 = /^[a-f0-9]{64}$/;
 const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/;
-const code = expected => e => e instanceof LedgerError && e.code === expected;
-
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
   if (value && typeof value === 'object')

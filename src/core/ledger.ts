@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { LedgerError, fail, matchedEvidenceFields, normalize, pageBounds, parseBundle, parseSnapshot, references } from './model.js';
+import { ID_MAX_LENGTH, ID_PATTERN, LedgerError, fail, matchedEvidenceFields, normalize, pageBounds, parseBundle, parseSnapshot, references } from './model.js';
 import type { Actor, Entry, EvidenceField, Input, Snapshot, State } from './model.js';
 import type { Store } from './ports.js';
 import type { LedgerObserver, ScanKind } from './observe.js';
@@ -15,6 +15,14 @@ function canonical(value: unknown): string {
 function digest(value: unknown): string { return createHash('sha256').update(canonical(value)).digest('hex'); }
 function sameVerifier(stored: Actor, claimed: { kind: string; id: string; model?: string }): boolean {
   return stored.kind === claimed.kind && stored.id === claimed.id && (stored.model ?? null) === (claimed.model ?? null);
+}
+/** Validate the caller's `asOf` paging token before opening a transaction. */
+function checkAsOf(asOf: number | undefined): void {
+  if (asOf !== undefined && (!Number.isInteger(asOf) || asOf < 0)) fail('VALIDATION', 'asOf must be a non-negative integer');
+}
+/** Fail closed when the ledger moved past the caller's `asOf` revision. */
+function assertRevision(asOf: number | undefined, revision: number): void {
+  if (asOf !== undefined && asOf !== revision) fail('CONFLICT', `ledger changed since revision ${asOf}; restart paging`);
 }
 type VerificationData = Extract<Input, { type: 'verification' }>['data'];
 export class Ledger {
@@ -202,10 +210,10 @@ export class Ledger {
     if (typeof query !== 'string' || query.length > 500 || query.includes('\u0000')) fail('VALIDATION', 'invalid query');
     const tokens = normalize(query).trim().split(/\s+/u).filter(Boolean);
     if (!tokens.length || tokens.length > 16) fail('VALIDATION', 'query needs 1..16 literal terms');
-    if (options.asOf !== undefined && (!Number.isInteger(options.asOf) || options.asOf < 0)) fail('VALIDATION', 'asOf must be a non-negative integer');
+    checkAsOf(options.asOf);
     return this.store.transaction(() => {
       const revision = this.store.revision();
-      if (options.asOf !== undefined && options.asOf !== revision) fail('CONFLICT', `ledger changed since revision ${options.asOf}; restart paging`);
+      assertRevision(options.asOf, revision);
       if (expand) {
         const inline = this.expanded(tokens, includeInactive, limit, offset, query, pathLimit, pathOffset, revision);
         if (projection === 'refs-v1') return toExpandedRefsV1(inline, { offset, limit, path_offset: pathOffset, path_limit: pathLimit });
@@ -282,14 +290,14 @@ export class Ledger {
   }
   inspectCapture(requestId: string, limit = 20, offset = 0, asOf?: number) {
     pageBounds(limit, offset);
-    if (typeof requestId !== 'string' || !/^[A-Za-z][A-Za-z0-9_.:-]{1,127}$/.test(requestId))
+    if (typeof requestId !== 'string' || requestId.length > ID_MAX_LENGTH || !ID_PATTERN.test(requestId))
       fail('VALIDATION', 'invalid request_id');
-    if (asOf !== undefined && (!Number.isInteger(asOf) || asOf < 0)) fail('VALIDATION', 'asOf must be a non-negative integer');
+    checkAsOf(asOf);
     return this.store.transaction(() => {
       const receipt = this.store.receipt(requestId) ?? fail('NOT_FOUND', `No capture: ${requestId}`);
       const ids = receipt.ids.slice(offset, offset + limit);
       const revision = this.store.revision();
-      if (asOf !== undefined && asOf !== revision) fail('CONFLICT', `ledger changed since revision ${asOf}; restart paging`);
+      assertRevision(asOf, revision);
       return { request_id: receipt.request_id, digest: receipt.digest, total: receipt.ids.length,
         items: ids.map(id => this.resolve(this.required(id))),
         next_offset: offset + limit < receipt.ids.length ? offset + limit : null,
@@ -298,12 +306,12 @@ export class Ledger {
   }
   show(id: string, limit = 20, offset = 0, asOf?: number) {
     pageBounds(limit, offset);
-    if (asOf !== undefined && (!Number.isInteger(asOf) || asOf < 0)) fail('VALIDATION', 'asOf must be a non-negative integer');
+    checkAsOf(asOf);
     return this.store.transaction(() => {
       const entry = this.required(id);
       const rows = this.store.incoming(id, limit + 1, offset);
       const revision = this.store.revision();
-      if (asOf !== undefined && asOf !== revision) fail('CONFLICT', `ledger changed since revision ${asOf}; restart paging`);
+      assertRevision(asOf, revision);
       return { ...this.resolve(entry), connections: rows.slice(0, limit).map(e => this.resolve(e)),
         next_offset: rows.length > limit ? offset + limit : null, revision, truth_evaluated: false };
     });

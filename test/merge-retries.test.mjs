@@ -6,15 +6,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { Ledger } from '../dist/index.js';
-import { LedgerError, parseSnapshot } from '../dist/core/model.js';
+import { parseSnapshot } from '../dist/core/model.js';
+import { code } from './helpers/assert.mjs';
 import { classifySameId, exactContentEquals, isLedgerId, sameForkMappingKey, sameOriginIdentity } from '../dist/core/mergeIdentity.js';
 
 const dir = new URL('./fixtures/merge-retries/', import.meta.url);
 const load = name => JSON.parse(readFileSync(new URL(name, dir), 'utf8'));
 const sha256hex = s => createHash('sha256').update(s, 'utf8').digest('hex');
 const HEX64 = /^[a-f0-9]{64}$/;
-const code = expected => e => e instanceof LedgerError && e.code === expected;
 const noTombstones = () => false;
 const isTombstone = entry => entry?.data?.redacted === true;
 
@@ -589,12 +588,4 @@ test('provisional register: every marker names a known dependency and all eleven
   // The ADR register is the normative list: every P-number resolves there.
   const adr = readFileSync(new URL('../docs/adr/0011-merge-retries-origin-receipts.md', import.meta.url), 'utf8');
   for (const marker of KNOWN) assert.ok(adr.includes(`| ${marker} |`), marker);
-});
-
-test('no merge machinery is activated', () => {
-  for (const method of ['merge', 'mergeSnapshot', 'importForeign', 'remap', 'applyMerge', 'resolveConflict']) {
-    assert.equal(method in Ledger.prototype, false, method);
-  }
-  assert.equal(typeof Ledger.prototype.exportSnapshot, 'function');
-  assert.equal(typeof Ledger.prototype.importSnapshot, 'function');
 });

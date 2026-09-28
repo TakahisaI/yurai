@@ -287,8 +287,9 @@ test('identity: remapped IDs must stay inside the ledger ID grammar', () => {
   }
 });
 
-test('identity: no merge machinery is activated', () => {
-  for (const method of ['merge', 'mergeSnapshot', 'importForeign', 'remap', 'applyMerge', 'resolveConflict']) {
+test('identity: no merge machinery is activated; restore exists but is not a merge', () => {
+  for (const method of ['merge', 'mergeSnapshot', 'mergePlan', 'mergeApply',
+    'importForeign', 'remap', 'applyMerge', 'resolveConflict', 'planMerge']) {
     assert.equal(method in Ledger.prototype, false, method);
   }
   // The spec module classifies only: fixed function and table surface.
@@ -297,15 +298,9 @@ test('identity: no merge machinery is activated', () => {
     'exactContentEquals', 'exactEntryEquals', 'isLedgerId', 'outcomeFor', 'sameForkMappingKey',
     'sameOriginIdentity',
   ]);
-});
-
-test('identity: restore exists but is not a merge', () => {
   // Pure surface assertion, no Store: the ledger exposes whole-snapshot
   // restore (refusal into a non-empty ledger is covered by ledger.test.mjs),
   // while no merge entry point exists for restore to silently become.
   assert.equal(typeof Ledger.prototype.exportSnapshot, 'function');
   assert.equal(typeof Ledger.prototype.importSnapshot, 'function');
-  for (const method of ['merge', 'mergeSnapshot', 'importForeign', 'remap', 'applyMerge', 'resolveConflict']) {
-    assert.equal(method in Ledger.prototype, false, method);
-  }
 });

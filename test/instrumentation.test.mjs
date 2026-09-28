@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Ledger, SqliteStore } from '../dist/index.js';
-import { CountingStore, ScanCollector } from '../dist/core/observe.js';
+import { memorySetup } from './helpers/memory.mjs';
 
 // Assess-only Core hooks (#44): exact Store-method-call / returned-row /
 // Ledger-scan counts on a synthetic fixture, plus behavior parity proving the
@@ -19,12 +19,7 @@ const FIXTURE = { version: 1, request_id: 'req_fixture', actor, entries: [
 ] };
 
 function setup(t, hooked) {
-  const raw = new SqliteStore(':memory:', true);
-  t.after(() => raw.close());
-  if (!hooked) return { ledger: new Ledger(raw, () => AT) };
-  const counting = new CountingStore(raw);
-  const scans = new ScanCollector();
-  return { ledger: new Ledger(counting, () => AT, scans), counting, scans };
+  return memorySetup(t, { hooked });
 }
 
 // Nonzero per-method [store-method calls, rows returned, rows written] plus
@@ -98,6 +93,19 @@ test('hooks on vs off produce identical results and bytes', t => {
     seen[name].push(ledger.capture({ version: 1, request_id: 'req_probe', actor,
       entries: [{ id: 'clm_i3', type: 'claim',
         data: { text: 'probe', kind: 'assertion', attributed_to: 'synthetic' } }] }));
+    seen[name].push(ledger.capture({ version: 1, request_id: 'req_dry', actor,
+      entries: [{ id: 'clm_dry', type: 'claim', data: { text: 'dry', kind: 'assertion', attributed_to: 'synthetic' } }] }, true));
+    const replay = { version: 1, request_id: 'req_replay', actor,
+      entries: [{ id: 'clm_replay', type: 'claim', data: { text: 'replay', kind: 'assertion', attributed_to: 'synthetic' } }] };
+    seen[name].push(ledger.capture(replay));
+    seen[name].push(ledger.capture(replay));
+    seen[name].push(ledger.capture({ version: 1, request_id: 'req_sup', actor, entries: [
+      { id: 'clm_sup', type: 'claim', data: { text: 'sup', kind: 'assertion', attributed_to: 'synthetic' } },
+      { id: 'rel_sup', type: 'relation', data: { from_claim_id: 'clm_sup', to_claim_id: 'clm_i1',
+        relation: 'supersedes', rationale: 'syn' } },
+    ] }));
+    seen[name].push(ledger.search('rareword', { expand: 'evidence', projection: 'refs-v1' }));
+    seen[name].push(ledger.inspectCapture('req_fixture'));
     seen[name].push(ledger.exportSnapshot());
   }
   assert.equal(JSON.stringify(seen.plain), JSON.stringify(seen.hooked));

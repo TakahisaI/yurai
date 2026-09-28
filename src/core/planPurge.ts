@@ -21,9 +21,8 @@
  * describe the defect class without naming the record (sensitivity doc).
  */
 import { createHash } from 'node:crypto';
-import { fail, LedgerError, references } from './model.js';
-import type { Entry, Receipt } from './model.js';
-import { canonicalJson } from './mergeIdentity.js';
+import { canonicalJson, fail, isKnownKind, isValidTimestamp, LedgerError, references } from './model.js';
+import type { Entry, Kind, Receipt } from './model.js';
 
 /** Read-only planning input. Never a writable Store handle: callers pass a
  *  detached entry/receipt snapshot (e.g. from exportSnapshot) plus the
@@ -79,15 +78,11 @@ export interface RefEdge {
  *  unknown kind would silently shrink the closure and is fail-open. */
 export type ReferenceResolver = (entry: Entry) => readonly RefEdge[];
 
-const KNOWN_KINDS: ReadonlySet<string> = new Set([
-  'source', 'claim', 'evidence', 'assessment', 'relation', 'review', 'verification',
-]);
-
 export function canonicalReferences(entry: Entry): readonly RefEdge[] {
   if (!entry || typeof entry !== 'object' || entry.data === null || typeof entry.data !== 'object') {
     fail('VALIDATION', 'plan source holds a malformed entry');
   }
-  if (!KNOWN_KINDS.has(entry.type)) {
+  if (!isKnownKind(entry.type)) {
     fail('UNKNOWN_KIND', `no reference table for record kind '${entry.type as string}'`);
   }
   return references(entry);
@@ -315,7 +310,12 @@ function sortedVia(member: ClosureMember): ViaEdge[] {
 
 // `via` edges accumulate deduplicated during the BFS (bounded by in-degree);
 // truncation to maxVia happens at report time over a sorted copy, so reports
-// stay deterministic regardless of discovery order.
+// stay deterministic regardless of discovery order. Single truncation
+// semantics shared by purge survivors and redact degraded dependents.
+function truncateVia(member: ClosureMember, maxVia: number): { via: ViaEdge[]; truncated: boolean } {
+  const via = sortedVia(member);
+  return { via: via.slice(0, maxVia), truncated: via.length > maxVia };
+}
 function reasonsFor(
   members: ReadonlyMap<string, ClosureMember>,
   ids: readonly string[],
@@ -327,13 +327,13 @@ function reasonsFor(
     .map(id => {
       const member = members.get(id) as ClosureMember;
       const entry = byId.get(id);
-      const via = sortedVia(member);
+      const { via, truncated: viaTruncated } = truncateVia(member, maxVia);
       return {
         id,
         type: entry?.type ?? 'unknown',
         depth: member.depth,
-        via: via.slice(0, maxVia),
-        viaTruncated: via.length > maxVia,
+        via,
+        viaTruncated,
       };
     });
 }
@@ -353,6 +353,21 @@ function blockedDigest(requestId: string): string {
   return sha256Hex(requestId);
 }
 
+/** Receipts are an order-insensitive set keyed by `request_id`: every sort
+ *  shares this comparator so digests cannot drift between call sites. */
+function byRequestId(a: { readonly request_id: string }, b: { readonly request_id: string }): number {
+  return a.request_id < b.request_id ? -1 : a.request_id > b.request_id ? 1 : 0;
+}
+
+/** Canonical live-receipt form for digests: sorted by `request_id`, each
+ *  receipt's `ids` kept in stored membership order. Single mapping shared by
+ *  the source fingerprint and both expected blocks. */
+function canonicalReceipts(receipts: readonly Receipt[]): { digest: string; ids: string[]; request_id: string }[] {
+  return [...receipts]
+    .sort(byRequestId)
+    .map(r => ({ digest: r.digest, ids: [...r.ids], request_id: r.request_id }));
+}
+
 function intersectingReceipts(
   receipts: readonly Receipt[],
   removal: ReadonlySet<string>,
@@ -367,7 +382,7 @@ function intersectingReceipts(
       surviving: receipt.ids.filter(id => !removal.has(id)).sort(),
     });
   }
-  return out.sort((a, b) => (a.request_id < b.request_id ? -1 : a.request_id > b.request_id ? 1 : 0));
+  return out.sort(byRequestId);
 }
 
 function purgeAffectedReceipts(
@@ -587,9 +602,7 @@ export interface RedactExpected {
  *  but equality: it names no content. */
 export function sourceFingerprint(source: PlanSource): string {
   checkSource(source);
-  const receipts = [...source.receipts]
-    .sort((a, b) => (a.request_id < b.request_id ? -1 : a.request_id > b.request_id ? 1 : 0))
-    .map(r => ({ digest: r.digest, ids: [...r.ids], request_id: r.request_id }));
+  const receipts = canonicalReceipts(source.receipts);
   return sha256Hex(canonicalJson({
     v: 2,
     source_id: source.source_id ?? '',
@@ -711,9 +724,16 @@ export interface PurgePlan {
   readonly closure_complete: boolean;
 }
 
-/** Plan a purge: refuse when dependents survive, else name the exact removal
- *  set, affected receipts, and blocked digests. Never mutates the source. */
-export function planPurge(source: PlanSource, select: readonly string[], options?: PurgeOptions): PurgePlan {
+/** Shared plan prologue: source validation, limits, resolver, selection
+ *  normalization, and the selection echo/digest binding. Purge and redact
+ *  run identical prologues — redact validates its `reason`/`redactedAt`
+ *  first, before calling this — so validation-error order is identical in
+ *  both modes. */
+function planPrologue(
+  source: PlanSource,
+  select: readonly string[],
+  options?: { readonly references?: ReferenceResolver; readonly limits?: PlanLimits; readonly resolverId?: string },
+) {
   checkSource(source);
   const limits = resolveLimits(options?.limits);
   const resolve = options?.references ?? canonicalReferences;
@@ -731,12 +751,42 @@ export function planPurge(source: PlanSource, select: readonly string[], options
   // echo halts incomplete, never approved as if whole.
   const selectionEcho = boundList(selection, limits.maxClosure);
   const selectionDigest = sha256Hex(canonicalJson(selection));
+  return { limits, resolve, resolverId, selection, byId, unknownIds, known, selectionEcho, selectionDigest };
+}
+
+/** Ready requires a bound, readable source: without source identity and
+ *  schema the plan cannot prove what it was computed against, and an
+ *  unsupported registry version — or a nonempty registry under a missing
+ *  version — carries a digest encoding the planner cannot know (ADR 0008)
+ *  — so it halts incomplete with no expectation. An explicit unsupported
+ *  version refuses even with an empty registry; only the absent legacy
+ *  extension plans as today. Refusals keep their refusal: they are
+ *  already unexecutable forecasts, not approvals. Shared so the fail-closed
+ *  rule cannot drift between modes. */
+function gateReady(
+  status: PlanStatus,
+  truncated: boolean,
+  source: PlanSource,
+): { status: PlanStatus; truncated: boolean } {
+  const sourceBound = source.source_id !== undefined && source.schema_version !== undefined;
+  if (status === 'ready' && (!sourceBound || !registryReadable(source))) {
+    return { status: 'incomplete', truncated: true };
+  }
+  return { status, truncated };
+}
+
+/** Plan a purge: refuse when dependents survive, else name the exact removal
+ *  set, affected receipts, and blocked digests. Never mutates the source. */
+export function planPurge(source: PlanSource, select: readonly string[], options?: PurgeOptions): PurgePlan {
+  const { limits, resolve, resolverId, byId, unknownIds, known, selectionEcho, selectionDigest } =
+    planPrologue(source, select, options);
 
   const { members, complete, unresolved: unresolvedAll } = computeClosure(byId, known, resolve, limits.maxClosure);
   const unresolvedIds = boundList(unresolvedAll, limits.maxReasons);
   const closed = complete && unresolvedAll.length === 0;
   const closureIds = closed ? [...members.keys()].sort() : [];
-  const survivorIds = closureIds.filter(id => !known.includes(id));
+  const knownSet = new Set(known);
+  const survivorIds = closureIds.filter(id => !knownSet.has(id));
   const survivors = boundList(closed ? reasonsFor(members, survivorIds, byId, limits.maxVia) : [], limits.maxReasons);
 
   const removal = new Set(closureIds);
@@ -769,26 +819,11 @@ export function planPurge(source: PlanSource, select: readonly string[], options
   } else {
     status = 'ready';
   }
-  // Ready requires a bound, readable source: without source identity and
-  // schema the plan cannot prove what it was computed against, and an
-  // unsupported registry version — or a nonempty registry under a missing
-  // version — carries a digest encoding the planner cannot know (ADR 0008)
-  // — so it halts incomplete with no expectation. An explicit unsupported
-  // version refuses even with an empty registry; only the absent legacy
-  // extension plans as today. Refusals keep their refusal: they are
-  // already unexecutable forecasts, not approvals.
-  const sourceBound = source.source_id !== undefined && source.schema_version !== undefined;
-  if (status === 'ready' && (!sourceBound || !registryReadable(source))) {
-    status = 'incomplete';
-    truncated = true;
-  }
+  ({ status, truncated } = gateReady(status, truncated, source));
   const liveIds = [...byId.keys()].filter(id => !removal.has(id)).sort();
   const liveEntries = source.entries.filter(e => !removal.has(e.id));
   const removedRequests = new Set(fullReceipts.map(r => r.request_id));
-  const liveReceipts = [...source.receipts]
-    .filter(r => !removedRequests.has(r.request_id))
-    .sort((a, b) => (a.request_id < b.request_id ? -1 : a.request_id > b.request_id ? 1 : 0))
-    .map(r => ({ digest: r.digest, ids: [...r.ids], request_id: r.request_id }));
+  const liveReceipts = canonicalReceipts(source.receipts.filter(r => !removedRequests.has(r.request_id)));
   const expected: PurgeExpected | null = closed && !receipts.truncated && status !== 'incomplete'
     ? {
       scope_ids: closureIds,
@@ -847,7 +882,12 @@ export const REDACT_SCOPE_NOTE =
   'Reference closure is not content discovery: only the bodies in scope are redacted; ' +
   'duplicated text elsewhere is not found or removed by this plan.';
 
-const TOMBSTONE_REF_KEYS: Readonly<Record<string, readonly string[]>> = {
+/** Every reference field a tombstone MUST retain, by record type. Keys
+ *  mirror `references()` in model.ts; the conformance test cross-checks this
+ *  list against that function so the two can never drift. Content matches
+ *  the fork inventory today but the owners differ (tombstone retention vs
+ *  fork rewrite), so both tables stay. */
+export const TOMBSTONE_REF_KEYS: Readonly<Record<Kind, readonly string[]>> = {
   source: [],
   claim: [],
   evidence: ['source_id'],
@@ -957,9 +997,7 @@ function checkRedactedAt(value: string): void {
     || !Number.isFinite(Date.parse(value))) {
     fail('VALIDATION', 'redactedAt must be a UTC timestamp like created_at');
   }
-  const iso = new Date(Date.parse(value)).toISOString();
-  const want = value.length === 20 ? value.replace('Z', '.000Z') : value;
-  if (iso !== want) fail('VALIDATION', 'redactedAt must be a valid UTC timestamp');
+  if (!isValidTimestamp(value)) fail('VALIDATION', 'redactedAt must be a valid UTC timestamp');
 }
 
 function tombstoneBody(entry: Entry, reason: RedactReason, redactedAt: string): Record<string, unknown> | null {
@@ -992,23 +1030,8 @@ export function planRedact(source: PlanSource, select: readonly string[], option
     fail('VALIDATION', 'redact reason must be sensitive or wrong-scope (never free text)');
   }
   checkRedactedAt(options.redactedAt);
-  checkSource(source);
-  const limits = resolveLimits(options.limits);
-  const resolve = options.references ?? canonicalReferences;
-  const resolverId = options.resolverId ?? 'canonical';
-  if (typeof resolverId !== 'string' || !resolverId) fail('VALIDATION', 'plan resolverId must be a non-empty string');
-  const selection = normalizeSelection(select);
-  const byId = new Map<string, Entry>();
-  for (const entry of source.entries) byId.set(entry.id, entry);
-  const unknownIds = boundList(selection.filter(id => !byId.has(id)).sort(), limits.maxReasons);
-  const known = selection.filter(id => byId.has(id));
-  // The full normalized selection drives the computation, but the plan
-  // echoes at most maxClosure IDs (the closure seed it feeds) with the true
-  // total in counts.selected and the full array bound opaquely in
-  // selection_digest. Ready plans always echo the whole selection: a cut
-  // echo halts incomplete, never approved as if whole.
-  const selectionEcho = boundList(selection, limits.maxClosure);
-  const selectionDigest = sha256Hex(canonicalJson(selection));
+  const { limits, resolve, resolverId, byId, unknownIds, known, selectionEcho, selectionDigest } =
+    planPrologue(source, select, options);
 
   const alreadyAll = known.filter(id => isTombstoned(byId.get(id) as Entry)).sort();
   const already = boundList(alreadyAll, limits.maxReasons);
@@ -1068,13 +1091,13 @@ export function planRedact(source: PlanSource, select: readonly string[], option
       .map(id => {
         const entry = byId.get(id) as Entry;
         const member = members.get(id) as ClosureMember;
-        const via = sortedVia(member);
+        const { via, truncated: viaTruncated } = truncateVia(member, limits.maxVia);
         const first = via[0] as ViaEdge | undefined;
         return {
           id,
           type: entry.type,
-          via: via.slice(0, limits.maxVia),
-          via_truncated: member.via.length > limits.maxVia,
+          via,
+          via_truncated: viaTruncated,
           impact: degradeImpact(entry.type, first?.role ?? ''),
         };
       })
@@ -1117,19 +1140,7 @@ export function planRedact(source: PlanSource, select: readonly string[], option
   } else {
     status = 'ready';
   }
-  // Ready requires a bound, readable source: without source identity and
-  // schema the plan cannot prove what it was computed against, and an
-  // unsupported registry version — or a nonempty registry under a missing
-  // version — carries a digest encoding the planner cannot know (ADR 0008)
-  // — so it halts incomplete with no expectation. An explicit unsupported
-  // version refuses even with an empty registry; only the absent legacy
-  // extension plans as today. Refusals keep their refusal: they are
-  // already unexecutable forecasts, not approvals.
-  const sourceBound = source.source_id !== undefined && source.schema_version !== undefined;
-  if (status === 'ready' && (!sourceBound || !registryReadable(source))) {
-    status = 'incomplete';
-    truncated = true;
-  }
+  ({ status, truncated } = gateReady(status, truncated, source));
 
   // An incomplete plan carries no expectation: no usable forecast leaves a
   // plan that must never be approved as if whole.
@@ -1151,10 +1162,7 @@ export function planRedact(source: PlanSource, select: readonly string[], option
         return tomb ? { ...e, data: tomb } : e;
       });
       const dropped = new Set(fullReceipts.map(r => r.request_id));
-      const liveReceipts = [...source.receipts]
-        .filter(r => !dropped.has(r.request_id))
-        .sort((a, b) => (a.request_id < b.request_id ? -1 : a.request_id > b.request_id ? 1 : 0))
-        .map(r => ({ digest: r.digest, ids: [...r.ids], request_id: r.request_id }));
+      const liveReceipts = canonicalReceipts(source.receipts.filter(r => !dropped.has(r.request_id)));
       expected = {
         scope_ids: scopeToBe,
         tombstones_digest: sha256Hex(canonicalJson(bodies)),

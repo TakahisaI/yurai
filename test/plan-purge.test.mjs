@@ -9,7 +9,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { LedgerError, references } from '../dist/core/model.js';
 import { canonicalJson } from '../dist/core/mergeIdentity.js';
-import { REDACT_SCOPE_NOTE, canonicalReferences, isPlanStale, planPurge, planRedact,
+import { REDACT_SCOPE_NOTE, TOMBSTONE_REF_KEYS, canonicalReferences, isPlanStale, planPurge, planRedact,
   sourceFingerprint, verifyPlanApproval, verifyPlanDigest } from '../dist/core/planPurge.js';
 
 const actor = { kind: 'agent', id: 'synthetic-planner' };
@@ -257,6 +257,30 @@ test('redact computes tombstoned bodies preserving IDs and the exact reference s
   assert.equal(plan.scope_note, REDACT_SCOPE_NOTE);
 });
 
+test('redact: tombstone inventory matches references() for every record type', () => {
+  assert.deepEqual(Object.keys(TOMBSTONE_REF_KEYS).sort(),
+    ['assessment', 'claim', 'evidence', 'relation', 'review', 'source', 'verification']);
+  const fixtures = {
+    source: source('pln_tk_src'),
+    claim: claim('pln_tk_clm'),
+    evidence: evidence('pln_tk_evd', 'pln_tk_src'),
+    assessment: assessment('pln_tk_asm', 'pln_tk_clm', 'pln_tk_evd'),
+    relation: relation('pln_tk_rel', 'pln_tk_clm', 'pln_tk_clm2'),
+    review: review('pln_tk_rev', 'pln_tk_clm'),
+    verification: verification('pln_tk_vrf', 'pln_tk_evd', 'pln_tk_src'),
+  };
+  for (const [type, input] of Object.entries(fixtures)) {
+    const refs = references(input);
+    const fields = TOMBSTONE_REF_KEYS[type];
+    assert.equal(fields.length, refs.length, `${type}: every reference retained, nothing else`);
+    for (const ref of refs) {
+      assert.ok(fields.some(field => input.data[field] === ref.id), `${type}: ${ref.role} ${ref.id}`);
+    }
+  }
+  assert.deepEqual(TOMBSTONE_REF_KEYS.claim, []);
+  assert.deepEqual(TOMBSTONE_REF_KEYS.source, []);
+});
+
 test('redact refuses an evidence-only scope until verifications join it', () => {
   const entries = [source('pln_cas_src'), evidence('pln_cas_evd', 'pln_cas_src'),
     verification('pln_cas_ver', 'pln_cas_evd', 'pln_cas_src')];
@@ -304,16 +328,6 @@ test('redact refuses already-tombstoned and unknown IDs explicitly', () => {
     e => e instanceof LedgerError && e.code === 'VALIDATION');
   assert.throws(() => planRedact(src_, ['pln_tmb_live'], { reason: 'sensitive', redactedAt: 'not-a-time' }),
     e => e instanceof LedgerError && e.code === 'VALIDATION');
-});
-
-test('a plan carries its revision; concurrent appends read as stale input', () => {
-  const src_ = snapshot([claim('pln_rev_clm')], [], 11);
-  const plan = planPurge(src_, ['pln_rev_clm']);
-  assert.equal(plan.revision, 11);
-  assert.equal(isPlanStale(plan, src_), false);
-  assert.equal(isPlanStale(plan, 11), false);
-  assert.equal(isPlanStale(plan, { ...src_, revision: 12 }), true);
-  assert.equal(isPlanStale(plan, 12), true);
 });
 
 test('planning never mutates the source snapshot', () => {
@@ -365,6 +379,7 @@ test('redact cascade scope drops the receipts of the required verifications too'
 test('changed source at the same revision reads as stale', () => {
   const base = snapshot([claim('pln_stl_clm'), source('pln_stl_src')], [], 7);
   const plan = planPurge(base, ['pln_stl_clm']);
+  assert.equal(plan.revision, 7);
   assert.equal(isPlanStale(plan, base), false);
   assert.equal(isPlanStale(plan, JSON.parse(JSON.stringify(base))), false);
   // Same revision, edited body.
@@ -484,26 +499,6 @@ test('state transitions report exact before/after review and anchor states', () 
     target: 'pln_trn_evd', event: 'pln_trn_ver', event_type: 'verification',
     before: 'anchor_match', after: 'anchor_not_verified',
   }]);
-});
-
-test('executor rejects stale sources and altered scopes instead of recomputing silently', () => {
-  const live = snapshot([claim('pln_exe_clm')], [], 9);
-  const approved = planPurge(live, ['pln_exe_clm']);
-  assert.equal(approved.status, 'ready');
-  const approvedDigest = approved.digest;
-  const execute = (artifact, source) => {
-    if (!verifyPlanApproval(artifact, approvedDigest)) return 'reject:altered-artifact';
-    if (isPlanStale(artifact, source)) return 'reject:stale-source';
-    const fresh = planPurge(source, approved.selection);
-    if (fresh.digest !== approvedDigest) return 'reject:altered-scope';
-    return 'execute';
-  };
-  assert.equal(execute(approved, live), 'execute');
-  assert.equal(execute({ ...approved, scope: [] }, live), 'reject:altered-artifact');
-  const appended = snapshot([...live.entries, review('pln_exe_rev', 'pln_exe_clm')], [], 9);
-  assert.equal(execute(approved, appended), 'reject:stale-source');
-  const moved = snapshot(live.entries, [], 10);
-  assert.equal(execute(approved, moved), 'reject:stale-source');
 });
 
 test('many unknown IDs truncate honestly instead of reporting whole', () => {

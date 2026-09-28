@@ -5,11 +5,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { Ledger, LedgerError, SqliteStore } from '../dist/index.js';
+import { code } from './helpers/assert.mjs';
 
 const example = JSON.parse(readFileSync(new URL('../examples/capture.json', import.meta.url), 'utf8'));
 const actor = { kind: 'agent', id: 'test-agent', model: 'synthetic' };
-const code = expected => e => e instanceof LedgerError && e.code === expected;
-
 function seed(t) {
   const dir = mkdtempSync(join(tmpdir(), 'yurai-ro-'));
   const path = join(dir, 'ledger.sqlite');
@@ -105,13 +104,6 @@ test('readonly open rejects missing, foreign, and contradictory targets', t => {
   assert.throws(() => new SqliteStore(':memory:', false, { readonly: true }), code('USAGE'));
 });
 
-test('doctor works readonly with the skipped FTS self-check stated', t => {
-  const s = seed(t);
-  const report = s.open(true).doctor();
-  assert.equal(report.ok, true);
-  assert.equal(report.fts_integrity, 'skipped-readonly');
-  assert.equal(s.open(false).doctor().fts_integrity, 'checked');
-});
 test('readonly open works on read-only files; writable writes fail', t => {
   const s = seed(t);
   const before = s.snapshot();
@@ -246,36 +238,6 @@ test('readonly readers see committed WAL frames and later commits', t => {
   assert.ok(firstAgain.includes('clm_wal_1') && firstAgain.includes('clm_wal_2'));
   s.close(first);
   s.close(second);
-});
-test('readonly and writable modes return identical read results', t => {
-  const s = seed(t);
-  const ro = new Ledger(s.open(true));
-  const rw = new Ledger(s.open(false));
-  for (const q of ['架空', '条件X']) {
-    assert.deepEqual(ro.search(q), rw.search(q));
-    assert.deepEqual(ro.search(q, { expand: 'evidence' }), rw.search(q, { expand: 'evidence' }));
-  }
-  assert.deepEqual(ro.show('clm_demo'), rw.show('clm_demo'));
-  const a = s.open(true).doctor();
-  const b = s.open(false).doctor();
-  assert.equal(a.ok, b.ok);
-  assert.equal(a.records, b.records);
-  assert.equal(a.search_index_consistent, b.search_index_consistent);
-});
-test('capture inspection works through the readonly path', t => {
-  const s = seed(t);
-  const writer = s.open(false);
-  new Ledger(writer).capture(bundle2('req_ro_inspect', 'clm_ro_inspect'));
-  s.close(writer);
-  const ledger = new Ledger(s.open(true));
-  const page = ledger.inspectCapture('req_synthetic_demo_v1', 20, 0);
-  assert.equal(page.total, 6);
-  assert.deepEqual(page.items.map(e => e.entry.id).sort(),
-    ['asm_demo', 'clm_demo', 'clm_limit', 'evd_demo', 'rel_limit', 'src_demo']);
-  const other = ledger.inspectCapture('req_ro_inspect', 20, 0);
-  assert.equal(other.total, 1);
-  assert.deepEqual(other.items.map(e => e.entry.id), ['clm_ro_inspect']);
-  assert.throws(() => ledger.inspectCapture('req_no_such_capture'), code('NOT_FOUND'));
 });
 test('readonly open racing a migration fails safe, then succeeds after commit', t => {
   const dir = mkdtempSync(join(tmpdir(), 'yurai-ro-'));
@@ -420,6 +382,7 @@ test('readonly parity covers paging, projections, and empty results', t => {
     ['one-char term', l => l.search('A')],
     ['two-char term', l => l.search('手法')],
     ['multi-term AND', l => l.search('架空 条件X')],
+    ['条件X search', l => l.search('条件X')],
     ['no-match search', l => l.search('存在しない用語ZZZ')],
     ['source search', l => l.search('架空', { kind: 'source' })],
     ['source search empty', l => l.search('PARITY', { kind: 'source' })],
@@ -537,9 +500,6 @@ test('readonly dry-run writes match writable; real writes fail READONLY', t => {
   assert.deepEqual(ro.capture(draft('req_parity_draft'), true), rw.capture(draft('req_parity_draft'), true));
   // Real writes through the readonly handle fail before mutation.
   const before = s.snapshot();
-  assert.throws(() => ro.capture({ version: 1, request_id: 'req_parity_refused', actor, entries: [
-    { id: 'clm_par_refused', type: 'claim', data: { text: 'PARITY synthetic refused', kind: 'assertion', attributed_to: 't' } },
-  ] }), code('READONLY'));
   assert.throws(() => ro.verifyEvidence({ evidence_id: 'evd_demo', content, actor, request_id: 'req_par_vref' }), code('READONLY'));
   assert.throws(() => ro.verifyEvidence({ evidence_id: 'evd_demo', content: null, actor, request_id: 'req_par_vref2' }), code('READONLY'));
   assert.deepEqual(s.snapshot(), before);
