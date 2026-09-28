@@ -58,6 +58,10 @@ before mutation; a schema needing migration fails and names a writable reopen. `
 skipped-readonly` because the FTS self-check is a write; writable doctor reports `checked`.
 Opening a WAL-mode ledger may still create `-shm`/`-wal` sidecars; the guarantee covers
 main-file bytes and WAL content, not the transient shared-memory index.
+SQLite opens lazily: on a read-only file even a writable open succeeds and
+fails on the first write, so reads of such files must still use `--readonly`.
+Read-only opens see committed WAL frames, including frames committed after an
+earlier read; they never use an immutable-file shortcut that ignores WAL state.
 search/show limit defaults to 20, max 100. offset is 0–1,000,000. next_offset=null ends that search/connection page.
 Responses carry `revision`, the current ledger change marker. Repeating a paged
 read with `--as-of REV` fails with CONFLICT when the ledger changed since that

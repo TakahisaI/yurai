@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, readFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, readdirSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -112,3 +112,61 @@ test('doctor works readonly with the skipped FTS self-check stated', t => {
   assert.equal(report.fts_integrity, 'skipped-readonly');
   assert.equal(s.open(false).doctor().fts_integrity, 'checked');
 });
+test('readonly open works on read-only files; writable writes fail', t => {
+  const s = seed(t);
+  const before = s.snapshot();
+  chmodSync(s.path, 0o444);
+  const store = s.open(true);
+  assert.equal(new Ledger(store).search('架空').items.length, 2);
+  s.close(store);
+  // SQLite opens lazily, so the failure surfaces on the first write, not open.
+  const writable = new SqliteStore(s.path);
+  assert.throws(() => new Ledger(writable).capture(bundle2('req_perm', 'clm_perm')));
+  writable.close();
+  // Restore before the seed hook removes the directory (Windows refuses
+  // to remove read-only files).
+  chmodSync(s.path, 0o644);
+  assert.deepEqual(s.snapshot(), before);
+});
+test('readonly readers see committed WAL frames and later commits', t => {
+  const s = seed(t);
+  const writer = s.open(false);
+  const ledger = new Ledger(writer);
+  ledger.capture(bundle2('req_wal_1', 'clm_wal_1'));
+  const first = s.open(true);
+  assert.ok(new Ledger(first).search('WALTERM').items.some(i => i.entry.id === 'clm_wal_1'));
+  ledger.capture(bundle2('req_wal_2', 'clm_wal_2'));
+  const second = s.open(true);
+  const ids = new Ledger(second).search('WALTERM').items.map(i => i.entry.id);
+  assert.ok(ids.includes('clm_wal_1') && ids.includes('clm_wal_2'));
+  s.close(first);
+  s.close(second);
+});
+test('readonly and writable modes return identical read results', t => {
+  const s = seed(t);
+  const ro = new Ledger(s.open(true));
+  const rw = new Ledger(s.open(false));
+  for (const q of ['架空', '条件X']) {
+    assert.deepEqual(ro.search(q).items.map(i => i.entry.id), rw.search(q).items.map(i => i.entry.id));
+    assert.deepEqual(ro.search(q, { expand: 'evidence' }).items.map(i => i.entry.id),
+      rw.search(q, { expand: 'evidence' }).items.map(i => i.entry.id));
+  }
+  assert.deepEqual(Object.keys(ro.show('clm_demo')).sort(), Object.keys(rw.show('clm_demo')).sort());
+  const a = s.open(true).doctor();
+  const b = s.open(false).doctor();
+  assert.equal(a.ok, b.ok);
+  assert.equal(a.records, b.records);
+  assert.equal(a.search_index_consistent, b.search_index_consistent);
+});
+test('capture inspection works through the readonly path', t => {
+  const s = seed(t);
+  const ledger = new Ledger(s.open(true));
+  const page = ledger.inspectCapture('req_synthetic_demo_v1', 20, 0);
+  assert.equal(page.total, 6);
+  assert.equal(page.items.length, 6);
+});
+function bundle2(request_id, id) {
+  return { version: 1, request_id, actor, entries: [
+    { id, type: 'claim', data: { text: 'WALTERM synthetic', kind: 'assertion', attributed_to: 't' } },
+  ] };
+}
