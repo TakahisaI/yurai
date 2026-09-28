@@ -70,6 +70,7 @@ The v1 migration is the initial schema only. v2 admits the `verification` record
 type by rebuilding the `records` table (SQLite cannot drop a CHECK), preserving
 `seq` so insertion order survives. Known v1 ledgers migrate automatically on
 writable open; a `--readonly` open refuses and names a writable reopen instead.
+Read-only parity and OS/filesystem limits are pinned in docs/readonly-limits.md.
 Migrations run as a numbered chain from the stored version to current;
 the registry owns each step's transaction and commits its DDL, integrity
 checks, and version update as one atomic unit, so any failure rolls everything
