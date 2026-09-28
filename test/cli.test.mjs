@@ -267,3 +267,44 @@ test('CLI rejects init --readonly as contradictory', t => {
   assert.equal(out.status, 2);
   assert.match(out.stderr, /readonly/);
 });
+test('CLI carries the full Core expanded-search representation without loss', t => {
+  const { run } = setup(t);
+  assert.equal(run(['init']).status, 0);
+  assert.equal(run(['capture', '--file', 'examples/eval/ledger.json']).status, 0);
+  assert.equal(run(['capture', '--file', 'examples/eval/ledger-wd-deps.json']).status, 0);
+  assert.equal(run(['capture', '--file', 'examples/eval/ledger-verify.json']).status, 0);
+  const out = run(['search', '38℃', '--expand', 'evidence']);
+  assert.equal(out.status, 0, out.stderr);
+  const found = JSON.parse(out.stdout);
+  assert.equal(found.query, '38℃');
+  assert.equal(found.match, 'expanded_evidence_routed');
+  assert.equal(typeof found.revision, 'number');
+  assert.equal(found.next_offset, null);
+  assert.equal(found.truth_evaluated, false);
+  assert.deepEqual(found.items.map(v => v.entry.id).sort(),
+    ['clm_eval_all', 'clm_eval_cause', 'clm_eval_drop', 'clm_eval_xz7']);
+  for (const item of found.items) {
+    assert.equal(item.direct_match, false);
+    assert.ok(item.total_paths >= 1);
+    assert.equal(item.paths_truncated, false);
+    assert.equal(item.via_next_offset, null);
+    assert.ok('state' in item && 'review' in item && 'warnings' in item);
+  }
+  const all = found.items.find(v => v.entry.id === 'clm_eval_all');
+  assert.equal(all.total_paths, 2);
+  assert.deepEqual(all.via.map(v => v.assessment.entry.data.stance).sort(), ['challenges', 'supports']);
+  for (const item of found.items) for (const v of item.via) {
+    for (const member of [v.evidence, v.assessment, v.source])
+      assert.ok('entry' in member && 'state' in member && 'review' in member && 'warnings' in member);
+    assert.ok('verification' in v.evidence);
+    assert.deepEqual(v.match_fields, ['quote']);
+    assert.equal(v.source.entry.id, v.evidence.entry.data.source_id);
+  }
+  const xz7 = found.items.find(v => v.entry.id === 'clm_eval_xz7').via[0];
+  assert.equal(xz7.evidence.entry.id, 'evd_eval_xz7');
+  assert.equal(xz7.evidence.verification.outcome, 'match');
+  assert.ok(xz7.evidence.warnings.includes('anchor_match'));
+  assert.equal(xz7.assessment.entry.id, 'asm_eval_xz7');
+  assert.equal(xz7.assessment.state, 'accepted');
+  assert.equal(xz7.assessment.review.id, 'rev_eval_xz7_asm');
+});
