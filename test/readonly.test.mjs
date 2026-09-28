@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, readFileSync, readdirSync, chmodSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, readdirSync, chmodSync, openSync, closeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -116,10 +116,19 @@ test('readonly open works on read-only files; writable writes fail', t => {
   const s = seed(t);
   const before = s.snapshot();
   chmodSync(s.path, 0o444);
+  try {
+    // Root and CAP_DAC_OVERRIDE bypass permission bits; without an enforced
+    // denial there is no write failure to assert.
+    closeSync(openSync(s.path, 'r+'));
+    chmodSync(s.path, 0o644);
+    t.skip('process can write despite read-only permission bits');
+    return;
+  } catch { /* permission enforced: proceed */ }
   const store = s.open(true);
   assert.equal(new Ledger(store).search('架空').items.length, 2);
   s.close(store);
-  // SQLite opens lazily, so the failure surfaces on the first write, not open.
+  // SQLite may fall back to a read-only connection when read-write access is
+  // unavailable, so the failure surfaces on the first write, not open.
   const writable = new SqliteStore(s.path);
   assert.throws(() => new Ledger(writable).capture(bundle2('req_perm', 'clm_perm')));
   writable.close();
@@ -139,6 +148,10 @@ test('readonly readers see committed WAL frames and later commits', t => {
   const second = s.open(true);
   const ids = new Ledger(second).search('WALTERM').items.map(i => i.entry.id);
   assert.ok(ids.includes('clm_wal_1') && ids.includes('clm_wal_2'));
+  // The earlier reader must see the later commit too: reads never pin a
+  // snapshot across operations.
+  const firstAgain = new Ledger(first).search('WALTERM').items.map(i => i.entry.id);
+  assert.ok(firstAgain.includes('clm_wal_1') && firstAgain.includes('clm_wal_2'));
   s.close(first);
   s.close(second);
 });
@@ -147,11 +160,10 @@ test('readonly and writable modes return identical read results', t => {
   const ro = new Ledger(s.open(true));
   const rw = new Ledger(s.open(false));
   for (const q of ['架空', '条件X']) {
-    assert.deepEqual(ro.search(q).items.map(i => i.entry.id), rw.search(q).items.map(i => i.entry.id));
-    assert.deepEqual(ro.search(q, { expand: 'evidence' }).items.map(i => i.entry.id),
-      rw.search(q, { expand: 'evidence' }).items.map(i => i.entry.id));
+    assert.deepEqual(ro.search(q), rw.search(q));
+    assert.deepEqual(ro.search(q, { expand: 'evidence' }), rw.search(q, { expand: 'evidence' }));
   }
-  assert.deepEqual(Object.keys(ro.show('clm_demo')).sort(), Object.keys(rw.show('clm_demo')).sort());
+  assert.deepEqual(ro.show('clm_demo'), rw.show('clm_demo'));
   const a = s.open(true).doctor();
   const b = s.open(false).doctor();
   assert.equal(a.ok, b.ok);
@@ -160,10 +172,18 @@ test('readonly and writable modes return identical read results', t => {
 });
 test('capture inspection works through the readonly path', t => {
   const s = seed(t);
+  const writer = s.open(false);
+  new Ledger(writer).capture(bundle2('req_ro_inspect', 'clm_ro_inspect'));
+  s.close(writer);
   const ledger = new Ledger(s.open(true));
   const page = ledger.inspectCapture('req_synthetic_demo_v1', 20, 0);
   assert.equal(page.total, 6);
-  assert.equal(page.items.length, 6);
+  assert.deepEqual(page.items.map(e => e.entry.id).sort(),
+    ['asm_demo', 'clm_demo', 'clm_limit', 'evd_demo', 'rel_limit', 'src_demo']);
+  const other = ledger.inspectCapture('req_ro_inspect', 20, 0);
+  assert.equal(other.total, 1);
+  assert.deepEqual(other.items.map(e => e.entry.id), ['clm_ro_inspect']);
+  assert.throws(() => ledger.inspectCapture('req_no_such_capture'), code('NOT_FOUND'));
 });
 function bundle2(request_id, id) {
   return { version: 1, request_id, actor, entries: [
