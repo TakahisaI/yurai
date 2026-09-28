@@ -81,6 +81,8 @@ is strictly Evidence→Assessment→Claim: sharing a Source never routes a Claim
 Each item carries `direct_match`, plus `via` entries with the matching
 Evidence (and matched fields), the linking Assessment with its stance, and
 the Evidence's Source — each with current state, review, and warnings.
+Routed Evidence views carry the same verification summary and anchor
+warnings as direct reads.
 `total_paths` counts routed paths (never independent corroboration) and
 `paths_truncated` marks a cut per-claim window: true whenever earlier or
 later paths fall outside it, so `false` always means `via` is complete. The per-claim window is

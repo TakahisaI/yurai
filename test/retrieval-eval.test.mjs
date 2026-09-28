@@ -189,3 +189,48 @@ test('retrieval eval: withdrawn source path keeps full states on the audit path'
   assert.equal(item.via[0].assessment.state, 'proposed');
   assert.equal(item.via[0].source.state, 'withdrawn');
 });
+
+test('retrieval eval: routed paths preserve review, verification, and provenance', t => {
+  const { store, ledgerApi } = setup();
+  t.after(() => store.close());
+  const result = ledgerApi.search('38℃', { expand: 'evidence' });
+  const item = result.items.find(i => i.entry.id === 'clm_eval_xz7');
+  assert.ok(item);
+  // Attribution, scope, and motive survive on the routed claim.
+  assert.equal(item.entry.data.attributed_to, 'fictional-experimenter');
+  assert.ok(item.entry.data.scope.includes('XZ-7'));
+  assert.ok(item.entry.data.why.length > 0);
+  const path = item.via.find(v => v.evidence.entry.id === 'evd_eval_xz7');
+  assert.ok(path);
+  // The verified anchor carries its verification summary and edition agreement.
+  assert.equal(path.evidence.verification.id, 'vrf_eval_xz7');
+  assert.equal(path.evidence.verification.outcome, 'match');
+  assert.equal(path.evidence.verification.edition.agreement, 'match');
+  assert.ok(path.evidence.warnings.includes('anchor_match'));
+  assert.ok(!path.evidence.warnings.includes('anchor_not_verified'));
+  // The accepted assessment carries its review, stance, and rationale.
+  assert.equal(path.assessment.state, 'accepted');
+  assert.equal(path.assessment.review.data.state, 'accepted');
+  assert.equal(path.assessment.entry.data.stance, 'supports');
+  assert.ok(path.assessment.entry.data.rationale.includes('Table 2'));
+  // Provenance: the attached source is the evidence's own declared source.
+  assert.equal(path.source.entry.id, path.evidence.entry.data.source_id);
+  assert.equal(path.source.entry.data.version, 'v1');
+  // The same verified anchor on the opposing path keeps its summary while
+  // the two paths stay separate assessments.
+  const rival = result.items.find(i => i.entry.id === 'clm_eval_all');
+  assert.ok(rival);
+  const challenge = rival.via.find(v => v.evidence.entry.id === 'evd_eval_xz7');
+  assert.ok(challenge);
+  assert.equal(challenge.assessment.entry.id, 'asm_eval_all_challenge');
+  assert.equal(challenge.assessment.entry.data.stance, 'challenges');
+  assert.notEqual(challenge.assessment.entry.id, path.assessment.entry.id);
+  assert.equal(challenge.evidence.verification.outcome, 'match');
+  // The unverified sibling anchor still says so instead of borrowing coverage.
+  const drop = result.items.find(i => i.entry.id === 'clm_eval_drop');
+  assert.ok(drop);
+  const unverified = drop.via.find(v => v.evidence.entry.id === 'evd_eval_drop');
+  assert.ok(unverified);
+  assert.equal(unverified.evidence.verification, null);
+  assert.ok(unverified.evidence.warnings.includes('anchor_not_verified'));
+});
