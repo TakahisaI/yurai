@@ -805,3 +805,72 @@ test('path order stays numeric across mixed timestamp precisions', t => {
   const item = found.items.find(v => v.entry.id === 'clm_mx');
   assert.deepEqual(item.via.map(p => p.assessment.entry.id), ['asm_mx2', 'asm_mx1']);
 });
+test('show pages many reviews before an old challenge without losing it', t => {
+  const { ledger } = setup(t);
+  ledger.capture(bundle([
+    { id: 'src_mr', type: 'source', data: { title: 't', medium: 'note', uri: 'urn:yurai:synthetic:mr' } },
+    claim('clm_mr', 'many reviews bury an old challenge MRQ'),
+    { id: 'evd_mr', type: 'evidence', data: { source_id: 'src_mr', quote: 'MRQ old reading' } },
+    { id: 'asm_mr_old', type: 'assessment', data: { claim_id: 'clm_mr', evidence_id: 'evd_mr', stance: 'challenges', rationale: 'early objection' } },
+  ], 'req_mr_base'));
+  const reviews = Array.from({ length: 12 }, (_, i) => ({ id: `rev_mr_${String(i).padStart(2, '0')}`, type: 'review',
+    data: { target_id: 'clm_mr', state: 'accepted', rationale: `retain ${i}` } }));
+  ledger.capture(bundle(reviews, 'req_mr_reviews'));
+  const pages = [];
+  for (let offset = 0; ; offset = pages[pages.length - 1].next_offset) {
+    const page = ledger.show('clm_mr', 5, offset);
+    pages.push(page);
+    if (page.next_offset === null) break;
+  }
+  assert.equal(pages.length, 3);
+  assert.ok(pages[0].connections.every(c => c.entry.type === 'review'));
+  assert.ok(pages[1].connections.every(c => c.entry.type === 'review'));
+  const ids = pages.flatMap(p => p.connections.map(c => c.entry.id));
+  assert.equal(ids.length, 13);
+  assert.equal(new Set(ids).size, 13);
+  assert.equal(ids.filter(id => id === 'asm_mr_old').length, 1);
+  assert.equal(ids[ids.length - 1], 'asm_mr_old');
+  const challenge = pages[2].connections.find(c => c.entry.id === 'asm_mr_old');
+  assert.equal(challenge.entry.data.stance, 'challenges');
+});
+test('same-timestamp entries keep a deterministic id tie-break', t => {
+  const { ledger } = setup(t);
+  ledger.capture(bundle([
+    { id: 'src_st', type: 'source', data: { title: 't', medium: 'note', uri: 'urn:yurai:synthetic:st' } },
+    { id: 'evd_st1', type: 'evidence', data: { source_id: 'src_st', quote: 'STX same-time anchor' } },
+    { id: 'evd_st2', type: 'evidence', data: { source_id: 'src_st', quote: 'STX same-time anchor' } },
+    { id: 'clm_st_a', type: 'claim', data: { text: 'first by id', kind: 'assertion', attributed_to: 'test' } },
+    { id: 'asm_st_a1', type: 'assessment', data: { claim_id: 'clm_st_a', evidence_id: 'evd_st1', stance: 'supports', rationale: 'r' } },
+    { id: 'asm_st_a2', type: 'assessment', data: { claim_id: 'clm_st_a', evidence_id: 'evd_st2', stance: 'challenges', rationale: 'r' } },
+    { id: 'clm_st_b', type: 'claim', data: { text: 'second by id', kind: 'assertion', attributed_to: 'test' } },
+    { id: 'asm_st_b1', type: 'assessment', data: { claim_id: 'clm_st_b', evidence_id: 'evd_st1', stance: 'context', rationale: 'r' } },
+  ], 'req_st'));
+  // The fixed clock stamps every entry identically, so seq order (b newest)
+  // must not win over the id tie-break (a first).
+  const order = () => ledger.search('STX', { expand: 'evidence' }).items.map(v => v.entry.id);
+  assert.deepEqual(order(), ['clm_st_a', 'clm_st_b']);
+  assert.deepEqual(order(), ['clm_st_a', 'clm_st_b']);
+  assert.equal(ledger.search('STX', { expand: 'evidence', limit: 1 }).items[0].entry.id, 'clm_st_a');
+  assert.equal(ledger.search('STX', { expand: 'evidence', limit: 1, offset: 1 }).items[0].entry.id, 'clm_st_b');
+  const paths = ledger.search('STX', { expand: 'evidence' }).items[0].via;
+  assert.deepEqual(paths.map(p => p.evidence.entry.id), ['evd_st1', 'evd_st2']);
+});
+test('paged reads reject malformed offsets, limits, and revisions', t => {
+  const { ledger } = setup(t);
+  ledger.capture(bundle([claim('clm_mf')], 'req_mf'));
+  for (const bad of [1.5, NaN, 1000001, '2', null])
+    assert.throws(() => ledger.search('AI', { offset: bad }), code('VALIDATION'), `offset ${String(bad)}`);
+  for (const bad of [0, 101, 1.5, NaN, '20', null])
+    assert.throws(() => ledger.search('AI', { limit: bad }), code('VALIDATION'), `limit ${String(bad)}`);
+  for (const bad of [-1, 1.5, NaN, 1000001])
+    assert.throws(() => ledger.search('AI', { expand: 'evidence', pathOffset: bad }), code('VALIDATION'), `pathOffset ${String(bad)}`);
+  for (const bad of [1.5, NaN])
+    assert.throws(() => ledger.search('AI', { expand: 'evidence', pathLimit: bad }), code('VALIDATION'), `pathLimit ${String(bad)}`);
+  for (const bad of [NaN, 1.5, '3', null])
+    assert.throws(() => ledger.search('AI', { asOf: bad }), code('VALIDATION'), `asOf ${String(bad)}`);
+  assert.throws(() => ledger.show('clm_mf', 1.5, 0), code('VALIDATION'));
+  assert.throws(() => ledger.show('clm_mf', 20, 0.5), code('VALIDATION'));
+  assert.throws(() => ledger.show('clm_mf', 20, 0, NaN), code('VALIDATION'));
+  assert.throws(() => ledger.inspectCapture('req_mf', 20, 0.5), code('VALIDATION'));
+  assert.throws(() => ledger.inspectCapture('req_mf', 20, 0, 1.5), code('VALIDATION'));
+});
