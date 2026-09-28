@@ -233,9 +233,44 @@ Errors go to stderr as `{"error":{"code":"...","message":"..."}}`. Node runtime 
 Exit codes: 0=success, 1=IO/runtime/schema/doctor failure, 2=input/usage, 3=no target, 4=conflict.
 Never build an adapter that drops states and warnings and treats bare content as grounds.
 
+## Tombstones and replay registry (proposed contract; no destructive path yet)
+
+Proposed future contract from ADR 0008 — not current behavior.
+Today's readers reject `redacted: true` bodies and the `registry`
+snapshot member under strict validation; the rules below define what
+a future implementation must accept and enforce.
+
+Redaction replaces a record body with a tombstone keeping the original
+`id`/`type`/`actor`/`created_at`, the reference targets its kind needs
+(`source_id`, `claim_id`+`evidence_id`, `from_claim_id`+`to_claim_id`,
+`target_id`, `target_evidence_id`+`target_source_id`, or none for
+Source/Claim), plus `redacted: true`, a `reason` marker
+(`sensitive | wrong-scope`), and `redacted_at`. All other content —
+verdicts, quotes, stances, outcomes, offsets, hashes — is removed and
+never backfilled; tombstoned Reviews/Verifications contribute nothing to
+effective state or anchor warnings. Redacting an Evidence also redacts
+every Verification targeting it; an Evidence-only scope is refused.
+Restore refuses a snapshot pairing tombstoned Evidence with a live
+Verification targeting it, restoring nothing.
+Direct capture of `redacted: true` bodies is rejected; tombstones arise
+only from the future redact path.
+
+Purge digests live in the same SQLite ledger and ride snapshots as an
+optional versioned `registry` extension (`registry_version`, sorted
+unique SHA-256 hex of purged `request_id` values; never raw IDs or
+content). Snapshot-format version and SQLite schema version are
+independent counters. Readers that do not understand the extension, or a
+`registry_version` they do not support, refuse the snapshot rather than
+restoring without it; snapshots without `registry` restore with an empty
+registry. A receipt plus a blocked digest of the same `request_id` fails
+closed with CONFLICT. Logical snapshot equality compares entries (exact
+per-ID), receipts, and registry digests as sets, plus a per-target
+Review/Verification event-order gate; bytewise SQLite-file equality is
+not required. See ADR 0008.
+
 ## Snapshot
 
-`format=yurai.snapshot`, `version=1`, entries, receipts. Each entry carries created_at and actor.
+`format=yurai.snapshot`, `version=1`, entries, receipts, and — once ADR 0008 is implemented — the optional `registry` extension (above; rejected by current readers). Each entry carries created_at and actor.
 CLI restore caps at 16 MiB. The 100,000 entries/receipts cap assumes small-scale operation; it is a safety bound, not a performance guarantee at that scale.
 export writes everything for small ledgers. Output beyond the current CLI restore limit errors out with no output, so unrestorable backups are never created. Large ledgers need streaming transfer plus SQLite backup operations.
 OS file permissions, disk encryption, and a safe location are the user's responsibility. Never commit DBs or snapshots to a public repository.
