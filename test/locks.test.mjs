@@ -199,15 +199,17 @@ test('failed captures still record hold-to-rollback', t => {
 
 test('contended BEGIN records zero hold despite the seconds-long busy wait', t => {
   const dir = mkdtempSync(join(tmpdir(), 'yurai-locks-'));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  // Single hook with explicit order: close the handle before removing the
+  // directory (Windows refuses to remove open database files).
+  const handles = {};
+  t.after(() => { handles.store?.close(); rmSync(dir, { recursive: true, force: true }); });
   const dbPath = join(dir, 'ledger.sqlite');
   const seed = new SqliteStore(dbPath, true);
   new Ledger(seed, () => AT).capture(FIXTURE);
   seed.close();
   // Open the contended store before the holder takes the lock, so only the
   // measured BEGIN IMMEDIATE contends (stores retry 5s via busy_timeout).
-  const contendedRaw = new SqliteStore(dbPath);
-  t.after(() => contendedRaw.close());
+  const contendedRaw = handles.store = new SqliteStore(dbPath);
   const counting = new CountingStore(contendedRaw);
   const contended = new Ledger(counting, () => AT, new ScanCollector());
   const holder = new DatabaseSync(dbPath);
