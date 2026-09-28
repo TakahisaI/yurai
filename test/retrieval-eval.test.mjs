@@ -163,7 +163,7 @@ test('retrieval eval: routed results carry paths, never corroboration counts', t
   assert.ok(result.items.length > 1);
   for (const item of result.items) {
     assert.deepEqual(Object.keys(item).sort(),
-      ['direct_match', 'entry', 'paths_truncated', 'review', 'state', 'total_paths', 'via', 'warnings']);
+      ['direct_match', 'entry', 'paths_truncated', 'review', 'state', 'total_paths', 'via', 'via_next_offset', 'warnings']);
     assert.ok(item.via.length > 0);
     for (const v of item.via) {
       assert.deepEqual(Object.keys(v).sort(), ['assessment', 'evidence', 'match_fields', 'source']);

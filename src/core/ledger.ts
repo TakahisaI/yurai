@@ -175,23 +175,26 @@ export class Ledger {
         outcome: stored.data.outcome, verification: this.view(stored) };
     return null;
   }
-  search(query: string, options: { kind?: 'claim' | 'source'; limit?: number; offset?: number; includeInactive?: boolean; expand?: 'evidence' } = {}) {
+  search(query: string, options: { kind?: 'claim' | 'source'; limit?: number; offset?: number; includeInactive?: boolean; expand?: 'evidence'; pathLimit?: number; pathOffset?: number } = {}) {
     const { kind = 'claim', limit = 20, offset = 0, includeInactive = false, expand } = options;
+    const pathLimit = options.pathLimit ?? limit, pathOffset = options.pathOffset ?? 0;
     pageBounds(limit, offset);
+    pageBounds(pathLimit, pathOffset);
     if (kind !== 'claim' && kind !== 'source') fail('VALIDATION', 'search kind must be claim or source');
     if (expand !== undefined && expand !== 'evidence') fail('VALIDATION', 'expand must be evidence');
     if (expand && kind !== 'claim') fail('VALIDATION', 'expanded discovery routes to claims only');
+    if (!expand && (options.pathLimit !== undefined || options.pathOffset !== undefined)) fail('VALIDATION', 'path paging needs expand');
     if (typeof query !== 'string' || query.length > 500 || query.includes('\u0000')) fail('VALIDATION', 'invalid query');
     const tokens = normalize(query).trim().split(/\s+/u).filter(Boolean);
     if (!tokens.length || tokens.length > 16) fail('VALIDATION', 'query needs 1..16 literal terms');
     return this.store.transaction(() => {
-      if (expand) return this.expanded(tokens, includeInactive, limit, offset, query);
+      if (expand) return this.expanded(tokens, includeInactive, limit, offset, query, pathLimit, pathOffset);
       const rows = this.store.search(kind, tokens, includeInactive, limit + 1, offset);
       return { items: rows.slice(0, limit).map(e => this.view(e)), next_offset: rows.length > limit ? offset + limit : null,
         query, match: 'literal_terms_and', truth_evaluated: false };
     });
   }
-  private expanded(tokens: string[], includeInactive: boolean, limit: number, offset: number, query: string) {
+  private expanded(tokens: string[], includeInactive: boolean, limit: number, offset: number, query: string, pathLimit: number, pathOffset: number) {
     // Exhaust small result sets, then page the union once: paging the evidence
     // scan or the direct matches first would silently drop routed claims.
     const direct: Entry[] = [];
@@ -234,9 +237,10 @@ export class Ledger {
         const kept = (includeInactive ? paths : paths.filter(p => live(p.evidence) && live(p.assessment) && live(p.source)))
           .sort((a, b) => byRecency(a.assessment, b.assessment) || a.evidence.id.localeCompare(b.evidence.id));
         return { ...this.view(claim), direct_match: direct,
-          via: kept.slice(0, limit).map(p => ({ evidence: this.view(p.evidence), assessment: this.view(p.assessment),
+          via: kept.slice(pathOffset, pathOffset + pathLimit).map(p => ({ evidence: this.view(p.evidence), assessment: this.view(p.assessment),
             source: this.view(p.source), match_fields: p.match_fields })),
-          total_paths: kept.length, paths_truncated: kept.length > limit };
+          total_paths: kept.length, paths_truncated: pathOffset + pathLimit < kept.length,
+          via_next_offset: pathOffset + pathLimit < kept.length ? pathOffset + pathLimit : null };
       })
       .filter(item => includeInactive || item.direct_match || item.total_paths > 0)
       .sort((a, b) => byRecency(a.entry, b.entry));

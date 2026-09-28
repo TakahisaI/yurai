@@ -705,3 +705,39 @@ test('migration failure rolls back and a repaired retry succeeds', t => {
   assert.equal(store.schemaVersion(), 2);
   assert.deepEqual(store.entries().map(e => e.id), ['src_f', 'evd_f']);
 });
+test('expanded discovery pages match paths independently with deterministic continuation', t => {
+  const { ledger } = setup(t);
+  const entries = [
+    { id: 'src_p', type: 'source', data: { title: 'synthetic paging', medium: 'note', uri: 'urn:yurai:synthetic:p' } },
+    { id: 'clm_p', type: 'claim', data: { text: 'paged routes', kind: 'assertion', attributed_to: 'test' } }];
+  for (const [suffix, text] of [['a', 'QPQ alpha'], ['b', 'QPQ beta'], ['c', 'QPQ gamma']])
+    entries.push({ id: `evd_p${suffix}`, type: 'evidence', data: { source_id: 'src_p', quote: text } });
+  entries.push(
+    { id: 'asm_pa', type: 'assessment', data: { claim_id: 'clm_p', evidence_id: 'evd_pa', stance: 'supports', rationale: 'for' } },
+    { id: 'asm_pa2', type: 'assessment', data: { claim_id: 'clm_p', evidence_id: 'evd_pa', stance: 'challenges', rationale: 'against' } },
+    { id: 'asm_pb', type: 'assessment', data: { claim_id: 'clm_p', evidence_id: 'evd_pb', stance: 'supports', rationale: 'for' } },
+    { id: 'asm_pc', type: 'assessment', data: { claim_id: 'clm_p', evidence_id: 'evd_pc', stance: 'context', rationale: 'nearby' } });
+  ledger.capture(bundle(entries, 'req_p_paths'));
+  const first = ledger.search('QPQ', { expand: 'evidence', limit: 20, pathLimit: 2 });
+  const item = first.items.find(v => v.entry.id === 'clm_p');
+  assert.equal(item.total_paths, 4);
+  assert.equal(item.via.length, 2);
+  assert.equal(item.via_next_offset, 2);
+  assert.equal(item.paths_truncated, true);
+  const second = ledger.search('QPQ', { expand: 'evidence', limit: 20, pathLimit: 2, pathOffset: 2 });
+  const rest = second.items.find(v => v.entry.id === 'clm_p');
+  assert.equal(rest.via.length, 2);
+  assert.equal(rest.via_next_offset, null);
+  assert.equal(rest.paths_truncated, false);
+  const union = [...item.via, ...rest.via].map(p => `${p.evidence.entry.id}/${p.assessment.entry.id}`).sort();
+  assert.deepEqual(union, ['evd_pa/asm_pa', 'evd_pa/asm_pa2', 'evd_pb/asm_pb', 'evd_pc/asm_pc']);
+  const again = ledger.search('QPQ', { expand: 'evidence', limit: 20, pathLimit: 2 });
+  assert.deepEqual(again.items.find(v => v.entry.id === 'clm_p').via.map(p => p.assessment.entry.id),
+    item.via.map(p => p.assessment.entry.id));
+  const coupled = ledger.search('QPQ', { expand: 'evidence', limit: 2 });
+  assert.equal(coupled.items.find(v => v.entry.id === 'clm_p').via.length, 2);
+  assert.equal(coupled.items.find(v => v.entry.id === 'clm_p').via_next_offset, 2);
+  assert.throws(() => ledger.search('QPQ', { pathLimit: 2 }), code('VALIDATION'));
+  assert.throws(() => ledger.search('QPQ', { expand: 'evidence', pathLimit: 0 }), code('VALIDATION'));
+  assert.throws(() => ledger.search('QPQ', { expand: 'evidence', pathLimit: 101 }), code('VALIDATION'));
+});

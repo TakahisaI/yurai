@@ -73,10 +73,17 @@ Each item carries `direct_match`, plus `via` entries with the matching
 Evidence (and matched fields), the linking Assessment with its stance, and
 the Evidence's Source — each with current state, review, and warnings.
 `total_paths` counts routed paths (never independent corroboration) and
-`paths_truncated` marks the per-claim cap, which equals `limit`. Claims page
-by newest first with the usual `next_offset`; ties on recorded time break by
-ascending ID, so same-capture direct matches may order differently than in
-direct search. The response tag is `match: expanded_evidence_routed`.
+`paths_truncated` marks a cut per-claim window. The per-claim window is
+independent of the claim page: `--path-limit` (1..100, default: `--limit`)
+and `--path-offset` page it, with `via_next_offset` continuing truncated
+paths to their end. Paths order deterministically by Assessment recency,
+then Evidence ID; paging assumes a quiescent ledger, since an intervening
+write can shift newest-first positions (revision binding is later work).
+`via` holds lexical matching paths only; `show` pages all inspected grounds.
+Claims page by newest first with the usual `next_offset`; ties on recorded
+time break by ascending ID, so same-capture direct matches may order
+differently than in direct search. The response tag is
+`match: expanded_evidence_routed`.
 
 Withdrawn/rejected Claims stay out by default and return in the
 `--include-inactive` audit path. Paths through withdrawn/rejected Evidence,
