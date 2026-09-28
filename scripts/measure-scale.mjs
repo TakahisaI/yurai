@@ -4,6 +4,10 @@
 // synthetic; no private data is read. Run with `node --expose-gc`: each heap
 // boundary runs five full collections first, and the report carries
 // per-phase heap deltas plus the post-cleanup residual per scale point.
+// Warm latency repeats a query on one open store; cold opens a fresh store on
+// the same db file per repetition (open + query + close per sample; process
+// cold only — the OS page cache is not dropped). Capture timings are measured
+// txn wall time inside BEGIN IMMEDIATE..COMMIT, not an OS-level lock proof.
 import { performance } from 'node:perf_hooks';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -46,7 +50,8 @@ const WORDS = ['光合成', '気孔', '蒸散', '葉緑素', '根圏', '開花',
 function buildLedger({ claims, evdPerClaim, asmPerEvd, reviewsPerClaim, verificationsFraction, quoteWords }) {
   const rand = rng(20260927);
   const dir = mkdtempSync(join(tmpdir(), 'yurai-scale-'));
-  const store = new SqliteStore(join(dir, 'ledger.sqlite'), true);
+  const dbPath = join(dir, 'ledger.sqlite');
+  const store = new SqliteStore(dbPath, true);
   const ledger = new Ledger(store, () => AT);
   const pick = () => WORDS[Math.floor(rand() * WORDS.length)];
   const counts = { source: 0, claim: 0, evidence: 0, assessment: 0, review: 0, verification: 0, relation: 0 };
@@ -95,17 +100,35 @@ function buildLedger({ claims, evdPerClaim, asmPerEvd, reviewsPerClaim, verifica
     ledger.capture({ version: 1, request_id: `req_scale_${c}`, actor, entries });
   }
   const buildMs = performance.now() - started;
-  return { dir, store, ledger, counts, buildMs };
+  return { dir, dbPath, store, ledger, counts, buildMs };
+}
+
+function summarize(samples) {
+  samples.sort((a, b) => a - b);
+  const runs = samples.length, mid = runs / 2;
+  const median = runs % 2 ? samples[mid | 0] : (samples[mid - 1] + samples[mid]) / 2;
+  return { median_ms: median, max_ms: samples[runs - 1] };
 }
 
 function time(fn, runs = 4) {
   fn();
   const samples = [];
   for (let i = 0; i < runs; i++) { const t = performance.now(); fn(); samples.push(performance.now() - t); }
-  samples.sort((a, b) => a - b);
-  const mid = runs / 2;
-  const median = runs % 2 ? samples[mid | 0] : (samples[mid - 1] + samples[mid]) / 2;
-  return { median_ms: median, max_ms: samples[runs - 1] };
+  return summarize(samples);
+}
+
+// Cold: one fresh store open per repetition (open + query + close per sample,
+// including the untimed warmup). Same median/max methodology as warm.
+function timeCold(dbPath, query, runs = 4) {
+  const once = () => {
+    const coldStore = new SqliteStore(dbPath);
+    try { query(new Ledger(coldStore, () => AT)); }
+    finally { coldStore.close(); }
+  };
+  once();
+  const samples = [];
+  for (let i = 0; i < runs; i++) { const t = performance.now(); once(); samples.push(performance.now() - t); }
+  return summarize(samples);
 }
 
 const SCALES = [
@@ -118,13 +141,21 @@ const SCALES = [
 const report = { env: { node: process.version, platform: process.platform, gc_control: true }, scales: [] };
 for (const shape of SCALES) {
   const heapBaseline = heapBytes();
-  const { dir, store, ledger, counts, buildMs } = buildLedger(shape);
+  const { dir, dbPath, store, ledger, counts, buildMs } = buildLedger(shape);
   const heapAfterBuild = heapBytes();
   const directCommon = time(() => ledger.search('COMMONTERM', { limit: 50 }));
   const directRare = time(() => ledger.search(`CLAIMRARE${shape.claims - 1}`, { limit: 50 }));
   const directShort = time(() => ledger.search('気孔', { limit: 50 }));
   const expanded = time(() => ledger.search('RARE7_0', { limit: 50, expand: 'evidence' }));
   const show = time(() => ledger.show('clm_m0007'));
+  // Cold runs the same queries with a fresh store open per repetition. The
+  // warm store stays open but idle (no open txn), so samples never contend —
+  // only the per-connection open/query/close cost differs from warm.
+  const directCommonCold = timeCold(dbPath, (l) => l.search('COMMONTERM', { limit: 50 }));
+  const directRareCold = timeCold(dbPath, (l) => l.search(`CLAIMRARE${shape.claims - 1}`, { limit: 50 }));
+  const directShortCold = timeCold(dbPath, (l) => l.search('気孔', { limit: 50 }));
+  const expandedCold = timeCold(dbPath, (l) => l.search('RARE7_0', { limit: 50, expand: 'evidence' }));
+  const showCold = timeCold(dbPath, (l) => l.show('clm_m0007'));
   const heapAfterQueries = heapBytes();
   const exportTimed = time(() => ledger.exportSnapshot());
   // Byte size uses the exact CLI export serialization the 16 MiB gate measures.
@@ -155,9 +186,20 @@ for (const shape of SCALES) {
   parsed = null;
   const heapAfterRelease = heapBytes();
   // Capture probes run last so export/import match the advertised counts.
+  // Each timing is the capture txn wall time (a BEGIN IMMEDIATE hold
+  // approximation as observed from JS), not an OS-level lock measurement.
+  // Both probes run the same checkReferences path, so the batch amortizes the
+  // per-txn full-ledger supersedes scan over 20 records.
   let probe = 0;
   const capture = time(() => ledger.capture({ version: 1, request_id: `req_probe_${shape.name}_${probe}`, actor,
     entries: [{ id: `clm_probe_${shape.name}_${probe++}`, type: 'claim', data: { text: 'probe', kind: 'assertion', attributed_to: 'syn' } }] }));
+  let batch = 0;
+  const captureBatch = time(() => {
+    const n = batch++;
+    ledger.capture({ version: 1, request_id: `req_batch_${shape.name}_${n}`, actor,
+      entries: Array.from({ length: 20 }, (_, i) => ({ id: `clm_batch_${shape.name}_${n}_${i}`, type: 'claim',
+        data: { text: `batch probe ${n}/${i}`, kind: 'assertion', attributed_to: 'syn' } })) });
+  });
   const heapAfterCapture = heapBytes();
   store.close();
   rmSync(dir, { recursive: true, force: true });
@@ -171,6 +213,8 @@ for (const shape of SCALES) {
     heapAfterImport, heapAfterRelease, heapAfterCapture);
   report.scales.push({ shape: shape.name, counts, build_ms: Math.round(buildMs),
     direct_common: directCommon, direct_rare: directRare, direct_short_2char: directShort, expanded, show, capture_single: capture,
+    direct_common_cold: directCommonCold, direct_rare_cold: directRareCold, direct_short_2char_cold: directShortCold,
+    expanded_cold: expandedCold, show_cold: showCold, capture_batch_20: captureBatch,
     export: exportTimed, export_bytes: exportBytes,
     import: importTimed,
     heap: { baseline_bytes: heapBaseline,
