@@ -246,6 +246,7 @@ test('retrieval eval: routed paths preserve review, verification, and provenance
   assert.equal(challenge.assessment.entry.data.stance, 'challenges');
   assert.notEqual(challenge.assessment.entry.id, path.assessment.entry.id);
   assert.equal(challenge.evidence.verification.outcome, 'match');
+  assert.deepEqual(challenge.evidence.verification, path.evidence.verification);
   // The unverified sibling anchor still says so instead of borrowing coverage.
   const drop = result.items.find(i => i.entry.id === 'clm_eval_drop');
   assert.ok(drop);
